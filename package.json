@@ -1,6 +1,6 @@
 {
   "name": "websync",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -17,6 +17,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",
+    "@tailwindcss/vite": "^4.1.6",
     "@vitejs/plugin-vue": "^5.2.3",
     "@vitest/eslint-plugin": "^1.1.39",
     "@vue/eslint-config-prettier": "^10.2.0",
@@ -26,7 +27,9 @@
     "globals": "^16.0.0",
     "jsdom": "^26.0.0",
     "prettier": "3.5.3",
+    "tailwindcss": "^4.1.6",
     "vite": "^6.2.4",
+    "vite-plugin-singlefile": "^2.2.0",
     "vite-plugin-vue-devtools": "^7.7.2",
     "vitest": "^3.1.1"
   }

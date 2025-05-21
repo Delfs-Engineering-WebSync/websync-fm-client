@@ -25,13 +25,17 @@ This will typically start the server at `http://localhost:5173/`.
 
 ### Building for Production
 
-To build the application for production (resulting in a single `index.html` file in the `dist` directory):
+To build the application for production:
 
 ```bash
 npm run build
 ```
 
-The outputted `dist/index.html` is the file intended for use in the FileMaker web viewer.
+### FileMaker Web Viewer Integration
+
+After running the `npm run build` command, the single file to be used within the FileMaker web viewer is located at:
+
+`dist/index.html`
 
 ### Previewing the Production Build
 

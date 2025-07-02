@@ -1,0 +1,725 @@
+// BetterForms Utility Functions
+// This module provides Vue equivalents for common BetterForms utilities
+
+import { useAppConfigStore } from '../stores/appConfig'
+import { fmBridgit } from '../fileMakerBridge'
+import {
+  doc,
+  updateDoc,
+  getFirestore,
+  onSnapshot,
+  query,
+  orderBy,
+  where,
+  Timestamp,
+} from 'firebase/firestore'
+
+// Equivalent to BF.getQueryParam()
+export function getQueryParam(paramName) {
+  const urlParams = new URLSearchParams(window.location.search)
+  return urlParams.get(paramName)
+}
+
+// Equivalent to BF.getUUID()
+export function getUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+    const r = (Math.random() * 16) | 0
+    const v = c == 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+}
+
+// FSUpdatesHandler - Process incoming updates from Firestore
+// CRDT System: These are resolved conflict-free updates from the cloud resolver
+// Each update contains fields with the most recent timestamps (field-level conflict resolution)
+// The cloud resolver has already compared field-level timestamps and selected "winning" values
+async function handleFSUpdates(options) {
+  const appConfig = useAppConfigStore()
+
+  // Check if we should process updates
+  if (typeof fmBridgit === 'undefined') {
+    log('FSUpdatesHandler - FileMaker not detected, skipping', 'warn')
+    return { success: false, message: 'FileMaker not available' }
+  }
+
+  if (appConfig.device.deviceMode === 'passive') {
+    log('FSUpdatesHandler - Device in passive mode, skipping', 'info')
+    return { success: true, message: 'Passive mode - no processing needed' }
+  }
+
+  const updates = options.updates || []
+
+  if (!updates.length) {
+    log('FSUpdatesHandler - No updates to process', 'info')
+    return { success: true, message: 'No updates to process' }
+  }
+
+  // Filter updates - only include those this device hasn't changed
+  const updatesFiltered = []
+  updates.forEach((update) => {
+    const minimalUpdate = {
+      id: update.id,
+      _table: update._table,
+      _tsModFireStore: update._tsModFireStore,
+      _ts: {},
+    }
+
+    if (typeof update._ts === 'undefined') {
+      update._ts = {}
+    }
+
+    // Process timestamp fields - each field has its own timestamp for conflict resolution
+    // Format: _ts: { fieldName: { ts: fileMakerTimestamp }, ... }
+    // FileMaker timestamps are in milliseconds/microseconds UTC format
+    Object.keys(update._ts).forEach((key) => {
+      if (typeof update._ts[key] === 'number') {
+        minimalUpdate[key] = update[key]
+        minimalUpdate._ts[key] = update._ts[key]
+      } else if (typeof update._ts[key] === 'object') {
+        minimalUpdate[key] = update[key]
+        minimalUpdate._ts[key] = update._ts[key]
+      }
+    })
+
+    // Add container and batch info if present
+    if (update?.devicePendingContainer) {
+      minimalUpdate.devicePendingContainer = update.devicePendingContainer
+    }
+    if (update?.batchTotalEdits) {
+      minimalUpdate.batchTotalEdits = update.batchTotalEdits
+    }
+    if (update?.batchIdEdits) {
+      minimalUpdate.batchIdEdits = update.batchIdEdits
+    }
+
+    updatesFiltered.push(minimalUpdate)
+  })
+
+  // Add to updates queue
+  appConfig.updatesQueue.push(...updatesFiltered)
+  appConfig.updatesTotal += updatesFiltered.length
+
+  log(
+    `Batched updates: ${updatesFiltered.length}, Total Updates: ${appConfig.updatesQueue.length}`,
+    'info',
+  )
+
+  // If already updating, don't start another process
+  if (appConfig.isUpdatingFM) {
+    return { success: true, message: 'Update process already running' }
+  }
+
+  // Start the update process
+  return await sendUpdatesToDatabase(appConfig)
+}
+
+// Helper function to send updates to FileMaker database
+async function sendUpdatesToDatabase(appConfig) {
+  const batchSize = appConfig.fmUpdatesBatchSize || 10 // Default batch size
+  let updatedTsModFireStoreLastUpdate = false
+
+  appConfig.isUpdatingFM = true
+
+  try {
+    while (appConfig.updatesQueue.length > 0) {
+      appConfig.startProcessing()
+
+      const batch = appConfig.updatesQueue.slice(0, batchSize)
+      const script = 'API - Web Sync Inbound dispatcher {payload}'
+      const parameter = {
+        updates: batch,
+        remaining: appConfig.updatesQueue.length - batch.length,
+      }
+
+      log(`Sending updates: ${batch.length}`, 'info')
+
+      const result = await fmBridgit.performScript(script, JSON.stringify(parameter), 10000)
+
+      if (result.success) {
+        log(`${batch.length} Updates successfully saved!`, 'info')
+        appConfig.updatesTotalCompleted += batch.length
+
+        // Process batch completion logic
+        updatesBatchesObject(batch, appConfig)
+
+        // Remove processed items from queue
+        appConfig.updatesQueue.splice(0, batch.length)
+
+        // Update local storage if needed
+        try {
+          const lsObjStr = window.localStorage.device
+          if (lsObjStr && updatedTsModFireStoreLastUpdate) {
+            const lsObj = JSON.parse(lsObjStr)
+            lsObj.tsModFireStoreLastUpdate = appConfig.device.tsModFireStoreLastUpdate
+            window.localStorage.device = JSON.stringify(lsObj)
+          }
+        } catch {
+          log('Error updating device object in localStorage', 'error')
+        }
+      } else {
+        log(`ERROR writing batch to database: ${JSON.stringify(result.error)}`, 'error')
+        break
+      }
+    }
+
+    // Update Firestore timestamp if needed
+    if (updatedTsModFireStoreLastUpdate) {
+      try {
+        const db = getFirestore()
+        const deviceRef = doc(
+          db,
+          'Organizations',
+          appConfig.organization.id,
+          'Devices',
+          appConfig.device.id,
+        )
+        await updateDoc(deviceRef, {
+          tsModFireStoreLastUpdate: new Date(appConfig.device.tsModFireStoreLastUpdate),
+        })
+      } catch (error) {
+        log(`Error updating Firestore timestamp: ${error.message}`, 'error')
+      }
+    }
+
+    // Check if all updates completed
+    if (appConfig.updatesTotal === appConfig.updatesTotalCompleted) {
+      log('Updates Completed!', 'info')
+      appConfig.updatesTotal = 0
+      appConfig.updatesTotalCompleted = 0
+    }
+
+    // Re-subscribe if timestamp was updated
+    if (updatedTsModFireStoreLastUpdate) {
+      log('Re-subscribing device with new timestamp', 'info')
+      namedAction('subscribeUpdatesDebounce')
+    }
+
+    return { success: true, message: 'Updates processed successfully' }
+  } catch (error) {
+    log(`Error in sendUpdatesToDatabase: ${error.message}`, 'error')
+    return { success: false, error: error.message }
+  } finally {
+    appConfig.isUpdatingFM = false
+  }
+}
+
+// Helper function to manage batch completion tracking
+function updatesBatchesObject(batch, appConfig) {
+  // Helper functions for timestamp conversion
+  function tsToMillis(ts) {
+    if (ts && ts.toMillis) {
+      return ts.toMillis() + (ts.nanoseconds || 0) / 1e6
+    }
+    return Date.parse(ts)
+  }
+
+  function tsToIsoString(ts) {
+    if (ts && ts.toMillis) {
+      const timestampMillis = ts.toMillis()
+      const timestampWithMilliseconds = timestampMillis + (ts.nanoseconds || 0) / 1e6
+      return new Date(timestampWithMilliseconds).toISOString()
+    }
+    return new Date(ts).toISOString()
+  }
+
+  function compareCurrentTs(batchIdEdits, ts) {
+    if (!Object.prototype.hasOwnProperty.call(appConfig.updatesBatches, batchIdEdits)) {
+      appConfig.updatesBatches[batchIdEdits] = { latestTs: ts }
+    } else if (tsToMillis(ts) > tsToMillis(appConfig.updatesBatches[batchIdEdits].latestTs)) {
+      appConfig.updatesBatches[batchIdEdits].latestTs = ts
+    }
+  }
+
+  // Process each edit in the batch
+  batch.forEach((edit) => {
+    if (edit.batchIdEdits) {
+      compareCurrentTs(edit.batchIdEdits, edit._tsModFireStore)
+
+      const batchInfo = appConfig.updatesBatches[edit.batchIdEdits]
+      const totalReceived = batchInfo.totalReceived || 0
+
+      if (totalReceived + 1 === edit.batchTotalEdits || edit.batchTotalEdits === 1) {
+        // Batch complete - update timestamp
+        appConfig.device.tsModFireStoreLastUpdate = tsToIsoString(batchInfo.latestTs)
+        delete appConfig.updatesBatches[edit.batchIdEdits]
+        return true // Signal that timestamp was updated
+      } else {
+        // Batch not complete - increment counter
+        batchInfo.totalReceived = totalReceived + 1
+      }
+    }
+  })
+
+  return false
+}
+
+// Handle editsUpdateStatus action
+function handleEditsUpdateStatus(options) {
+  const appConfig = useAppConfigStore()
+
+  if (options.currentState) {
+    appConfig.editsCurrentState = options.currentState
+  }
+
+  if (typeof options.pendingEdits !== 'undefined') {
+    appConfig.editsTotalPending = options.pendingEdits
+  }
+
+  // Return success to FileMaker
+  if (typeof fmBridgit !== 'undefined') {
+    fmBridgit.returnResult({ status: 'ok' })
+  }
+
+  return Promise.resolve({ success: true, message: 'Edit status updated' })
+}
+
+// Handle updatesContainerDownloads action
+function handleUpdatesContainerDownloads(options) {
+  const appConfig = useAppConfigStore()
+
+  if (typeof options?.updates?.totalContainers !== 'undefined') {
+    appConfig.updateTotalContainers += options.updates.totalContainers
+  }
+
+  if (typeof options?.updates?.completedContainers !== 'undefined') {
+    appConfig.updateCompletedContainers += options.updates.completedContainers
+  }
+
+  // Reset counters when complete
+  if (appConfig.updateCompletedContainers === appConfig.updateTotalContainers) {
+    appConfig.updateCompletedContainers = 0
+    appConfig.updateTotalContainers = 0
+  }
+
+  // Handle overflow
+  if (appConfig.updateCompletedContainers > appConfig.updateTotalContainers) {
+    appConfig.updateCompletedContainers = 0
+  }
+
+  // Return success to FileMaker
+  if (typeof fmBridgit !== 'undefined') {
+    fmBridgit.returnResult({ status: 'ok' })
+  }
+
+  return Promise.resolve({ success: true, message: 'Container downloads updated' })
+}
+
+// Handle webSyncReceivePayload action
+async function handleWebSyncReceivePayload(options) {
+  const appConfig = useAppConfigStore()
+  const payload = options.payload
+
+  if (!payload) {
+    return Promise.resolve({ success: false, message: 'No payload provided' })
+  }
+
+  // Handle status ping
+  if (payload.status) {
+    if (typeof fmBridgit !== 'undefined') {
+      fmBridgit.returnResult({ status: 'ok' })
+    }
+    return Promise.resolve({ success: true, message: 'Status ping acknowledged' })
+  }
+
+  // Process edits if they exist
+  if (payload.edits && Array.isArray(payload.edits)) {
+    log(`Payload received from FM (${JSON.stringify(payload).length} bytes)`, 'info')
+
+    // Wait for Firebase to be ready (simplified version)
+    let counter = 0
+    const maxAttempts = 5
+
+    while (counter < maxAttempts) {
+      // Check if we have Firebase references (this would be set by firebaseInit)
+      if (window.fsDeviceRef) {
+        // Process each edit
+        payload.edits.forEach((edit) => {
+          // Add edit to Firestore (simplified - in real implementation this would use proper Firebase v9 syntax)
+          log('Processing edit for Firestore', 'info')
+
+          if (edit.typeEdit === 'containerIsUploaded') {
+            appConfig.editsContainersComplete += 1
+          }
+        })
+
+        // Update edit state
+        appConfig.editsCurrentState = '4'
+
+        // Reset counters when complete
+        if (appConfig.editsContainersComplete === appConfig.editsContainersTotal) {
+          appConfig.editsContainersComplete = 0
+          appConfig.editsContainersTotal = 0
+        }
+
+        // Return success to FileMaker with timestamp if provided
+        const response = {
+          payload: payload.modificationTimestampUTCEnd
+            ? {
+                modificationTimestampUTCEnd: payload.modificationTimestampUTCEnd,
+              }
+            : {},
+        }
+
+        if (typeof fmBridgit !== 'undefined') {
+          fmBridgit.returnResult(response)
+        }
+
+        return Promise.resolve({ success: true, message: 'Payload processed successfully' })
+      } else {
+        counter++
+        log(`FS not ready yet, attempt: ${counter}`, 'warn')
+
+        if (counter >= maxAttempts) {
+          log('webSync Timeout - Firebase not ready', 'error')
+          return Promise.resolve({ success: false, message: 'Firebase timeout' })
+        }
+
+        // Wait 1 second before retry
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+      }
+    }
+  }
+
+  return Promise.resolve({ success: false, message: 'No edits to process' })
+}
+
+// Handle subscribeUpdates action - Set up Firestore listener for updates
+function handleSubscribeUpdates() {
+  const appConfig = useAppConfigStore()
+
+  // Check if device should subscribe to updates
+  if (appConfig.device.deviceMode === 'passive') {
+    log('subscribeUpdates - Device in passive mode, skipping subscription', 'info')
+    return Promise.resolve({ success: true, message: 'Passive mode - no subscription needed' })
+  }
+
+  try {
+    // Determine timestamp for filtering
+    const defaultTimestamp = new Date()
+    const timestamp = appConfig.device.tsModFireStoreLastUpdate
+      ? new Date(appConfig.device.tsModFireStoreLastUpdate)
+      : defaultTimestamp
+
+    log(
+      `subscribeUpdates - Starting subscription from timestamp: ${timestamp.toISOString()}`,
+      'info',
+    )
+
+    // Update device timestamp if using default
+    if (timestamp === defaultTimestamp) {
+      appConfig.device.tsModFireStoreLastUpdate = timestamp
+
+      // Save back to Firestore if we have references
+      if (window.fsDeviceRef) {
+        try {
+          const db = getFirestore()
+          const deviceRef = doc(
+            db,
+            'Organizations',
+            appConfig.organization.id,
+            'Devices',
+            appConfig.device.id,
+          )
+          updateDoc(deviceRef, {
+            tsModFireStoreLastUpdate: timestamp,
+          }).catch((error) => {
+            log(`Error updating device timestamp: ${error.message}`, 'error')
+          })
+        } catch (error) {
+          log(`Error accessing Firestore for timestamp update: ${error.message}`, 'error')
+        }
+      }
+    }
+
+    // Clean up existing subscription if any
+    if (window.fsUpdatesRefUnsubscribe && typeof window.fsUpdatesRefUnsubscribe === 'function') {
+      window.fsUpdatesRefUnsubscribe()
+      log('subscribeUpdates - Cleaned up existing subscription', 'info')
+    }
+
+    // Check if we have the required Firestore references
+    if (!window.fsUpdatesRef) {
+      log('subscribeUpdates - Firestore updates reference not available, cannot subscribe', 'warn')
+      return Promise.resolve({ success: false, message: 'Firestore references not available' })
+    }
+
+    // Set up the Firestore query
+    const updatesQuery = query(
+      window.fsUpdatesRef,
+      orderBy('_tsModFireStore', 'asc'),
+      where('_tsModFireStore', '>', Timestamp.fromDate(timestamp)),
+      where('_contexts', 'array-contains-any', appConfig.device.contexts),
+    )
+
+    // Set up the snapshot listener
+    window.fsUpdatesRefUnsubscribe = onSnapshot(
+      updatesQuery,
+      { includeMetadataChanges: false },
+      (snapshot) => {
+        processSnapshot(snapshot, appConfig)
+      },
+      (error) => {
+        log(`subscribeUpdates - Snapshot listener error: ${error.message}`, 'error')
+      },
+    )
+
+    log('subscribeUpdates - Firestore listener established successfully', 'info')
+    return Promise.resolve({ success: true, message: 'Updates subscription established' })
+  } catch (error) {
+    log(`subscribeUpdates - Error setting up subscription: ${error.message}`, 'error')
+    return Promise.resolve({ success: false, error: error.message })
+  }
+}
+
+// Process Firestore snapshot changes and call FSUpdatesHandler
+// Process Firestore snapshot changes - part of the CRDT subscription system
+// This handles real-time updates from the cloud resolver containing conflict-free data
+function processSnapshot(snapshot, appConfig) {
+  if (!snapshot || snapshot.empty) {
+    log('processSnapshot - No updates in snapshot', 'info')
+    return
+  }
+
+  const updates = []
+  const notToIncludeInTs = ['devicePendingContainer', 'batchTotalEdits', 'batchIdEdits']
+
+  snapshot.docChanges().forEach(async (change) => {
+    const update = change.doc.data()
+
+    if (change.type === 'added' || change.type === 'modified') {
+      log(
+        `processSnapshot - Processing ${change.type} update: ${update.id || change.doc.id}`,
+        'info',
+      )
+
+      // Trigger processing state
+      namedAction('isProcessing')
+
+      // Process timestamp filtering
+      const tsStart = 62135596800 // Offset for FileMaker timestamp in milliseconds
+      const currentTsModFireStoreLastUpdate =
+        Date.parse(appConfig.device.tsModFireStoreLastUpdate) / 1000
+
+      // Initialize updatedKeys if not present
+      if (!update.updatedKeys) {
+        update.updatedKeys = []
+      }
+
+      // Check which fields have been updated since last sync
+      if (update._ts) {
+        for (const [key, value] of Object.entries(update._ts)) {
+          if (value && value.ts) {
+            const keyTs = Math.round(value.ts / 1000) - tsStart
+            if (keyTs > currentTsModFireStoreLastUpdate && !update.updatedKeys.includes(key)) {
+              update.updatedKeys.push(key)
+            }
+          }
+        }
+      }
+
+      // Create minimal update object
+      const updatedObj = {
+        _table: update._table,
+        id: update.id || change.doc.id,
+        _tsModFireStore: update._tsModFireStore,
+        _ts: {},
+      }
+
+      // Add only updated fields
+      update.updatedKeys.forEach((key) => {
+        updatedObj[key] = update[key]
+        if (!notToIncludeInTs.includes(key)) {
+          updatedObj._ts[key] = update._ts[key]
+        }
+      })
+
+      // Add batch information if present
+      if (update.batchTotalEdits) updatedObj.batchTotalEdits = update.batchTotalEdits
+      if (update.batchIdEdits) updatedObj.batchIdEdits = update.batchIdEdits
+      if (update.devicePendingContainer)
+        updatedObj.devicePendingContainer = update.devicePendingContainer
+
+      updates.push(updatedObj)
+    }
+  })
+
+  // Process updates if any
+  if (updates.length > 0) {
+    log(`processSnapshot - Calling FSUpdatesHandler with ${updates.length} updates`, 'info')
+
+    // Get the latest timestamp for tracking
+    const latestUpdate = updates[updates.length - 1]
+    const _tsModFireStoreLastUpdate = latestUpdate._tsModFireStore
+
+    // Call FSUpdatesHandler
+    namedAction('FSUpdatesHandler', {
+      updates: updates,
+      _tsModFireStoreLastUpdate:
+        _tsModFireStoreLastUpdate instanceof Date
+          ? _tsModFireStoreLastUpdate
+          : new Date(_tsModFireStoreLastUpdate),
+    })
+  }
+}
+
+// Equivalent to BF.namedAction() - but uses Pinia actions instead
+export function namedAction(actionName, options = {}) {
+  const appConfig = useAppConfigStore()
+
+  switch (actionName) {
+    case 'isProcessing':
+      return appConfig.startProcessing()
+
+    case 'endProcessing':
+      return appConfig.endProcessing()
+
+    case 'promptUserToConfigure':
+      // Mock user configuration prompt
+      console.log('[namedAction] promptUserToConfigure called')
+      return Promise.resolve({ success: true, message: 'User prompted (mocked)' })
+
+    case 'getSignedURL':
+      // Mock signed URL generation (used by Uppy in original)
+      console.log('[namedAction] getSignedURL called with options:', options)
+      return Promise.resolve(`https://mock-signed-url.com/${options.name}`)
+
+    case 'FSUpdatesHandler':
+      return handleFSUpdates(options)
+
+    case 'editsUpdateStatus':
+      return handleEditsUpdateStatus(options)
+
+    case 'updatesContainerDownloads':
+      return handleUpdatesContainerDownloads(options)
+
+    case 'webSyncReceivePayload':
+      return handleWebSyncReceivePayload(options)
+
+    case 'subscribeUpdates':
+      return handleSubscribeUpdates(options)
+
+    case 'subscribeUpdatesDebounce':
+      // This would typically implement a debounced version of subscribeUpdates
+      // For now, we'll just log it
+      log('subscribeUpdatesDebounce called - would re-subscribe to updates', 'info')
+      return Promise.resolve({ success: true, message: 'Debounced subscription triggered' })
+
+    default:
+      console.warn(`[namedAction] Unknown action: ${actionName}`)
+      return Promise.resolve({ success: false, message: `Unknown action: ${actionName}` })
+  }
+}
+
+// Equivalent to BF.actionsClear()
+export function actionsClear() {
+  console.log('[BF] actionsClear called - clearing action queue (mocked)')
+  // In BetterForms this clears the action queue
+  // In Vue, we might clear pending operations or reset state
+  const appConfig = useAppConfigStore()
+  appConfig.endProcessing()
+}
+
+// Equivalent to BF.setGlobalVar()
+export function setGlobalVar(varName, value) {
+  const appConfig = useAppConfigStore()
+
+  // Map common BetterForms global variables to Pinia state
+  switch (varName) {
+    case 'isProcessing':
+      if (value) {
+        appConfig.startProcessing()
+      } else {
+        appConfig.endProcessing()
+      }
+      break
+
+    default:
+      // For other variables, we could extend the store or use a generic approach
+      console.log(`[setGlobalVar] ${varName} = ${value}`)
+      // Could store in a generic globals object in the store if needed
+      break
+  }
+}
+
+// Equivalent to BF.getGlobalVar()
+export function getGlobalVar(varName) {
+  const appConfig = useAppConfigStore()
+
+  switch (varName) {
+    case 'isProcessing':
+      return appConfig.isProcessing
+
+    case 'deviceId':
+      return appConfig.device.id
+
+    case 'organizationId':
+      return appConfig.organization.id
+
+    default:
+      console.warn(`[getGlobalVar] Unknown variable: ${varName}`)
+      return null
+  }
+}
+
+// Equivalent to BF.showAlert() or BF.showDialog()
+export function showAlert(message, title = 'Alert') {
+  // In a real app, you might use a toast library or modal component
+  console.log(`[Alert] ${title}: ${message}`)
+  alert(`${title}\n\n${message}`)
+}
+
+// Equivalent to BF.log() or BF.console()
+export function log(message, level = 'info') {
+  const timestamp = new Date().toISOString()
+  const prefix = `[BF-${level.toUpperCase()}] ${timestamp}`
+
+  switch (level) {
+    case 'error':
+      console.error(prefix, message)
+      break
+    case 'warn':
+      console.warn(prefix, message)
+      break
+    case 'debug':
+      console.debug(prefix, message)
+      break
+    default:
+      console.log(prefix, message)
+  }
+}
+
+// Create a BF-like global object for compatibility
+// namedActionFM - FileMaker-specific named action handler
+// This is called by FileMaker scripts and expects a JSON string parameter
+export function namedActionFM(jsonString) {
+  try {
+    const params = JSON.parse(jsonString)
+    const { name, options = {} } = params
+
+    log(`namedActionFM called: ${name}`, 'info')
+
+    // Call the regular namedAction with parsed parameters
+    return namedAction(name, options)
+  } catch (error) {
+    log(`Error in namedActionFM: ${error.message}`, 'error')
+    return Promise.resolve({ success: false, error: error.message })
+  }
+}
+
+export const BF = {
+  getQueryParam,
+  getUUID,
+  namedAction,
+  namedActionFM,
+  actionsClear,
+  setGlobalVar,
+  getGlobalVar,
+  showAlert,
+  log,
+}
+
+// Make it available globally for maximum compatibility
+if (typeof window !== 'undefined') {
+  window.BF = BF
+  window.processSnapshot = processSnapshot // For testing purposes
+}

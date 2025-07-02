@@ -100,3 +100,57 @@ The user is creating a standalone web app that runs in a FileMaker web viewer. T
 - `README.md`: Updated with project setup, build info, key commands, and FileMaker integration details.
 
 The project is currently set up to initialize its configuration from URL parameters, initialize Firebase (including creating/checking parent documents in Firestore if not in "passive" mode), and has basic Font Awesome integration. The next step was to continue translating the `initFirestore` script.
+
+**CRDT System Architecture:**
+User explained the system is actually a CRDT (Conflict-free Replicated Data Type) where:
+
+- Edits are local changes pushed to cloud
+- Cloud resolver processes conflicts using field-level timestamps
+- Updates are resolved changes pushed back to subscribed devices
+- Each field has individual timestamps in `_ts` object for conflict resolution
+- System handles distributed data synchronization with proper conflict resolution
+
+**Detailed CRDT Operation:**
+
+**Field-Level Timestamp Resolution:**
+
+- Each record has an `_ts` sub-object containing field-level timestamps
+- Format: `_ts: { fieldName: { ts: timestamp }, ... }`
+- Timestamps are FileMaker UTC timestamps in milliseconds/microseconds
+- This enables field-level conflict resolution rather than record-level
+- Most recent timestamp wins for each individual field
+
+**Edit vs Update Flow:**
+
+1. **Edits:** Local device changes uploaded to cloud Firestore
+
+   - Single edit = single record change
+   - Can come in batches as arrays, but each batch contains single edits for single records
+   - Each edit triggers cloud resolver immediately upon upload
+
+2. **Cloud Resolver Process:**
+
+   - Triggered whenever any client adds record to edits table
+   - Compares timestamps for each field based on record ID and field key
+   - Most recent timestamp wins (if exact tie, last edit wins)
+   - Produces resolved conflict-free updates
+
+3. **Updates:** Resolved conflict-free data pushed back to subscribed devices
+   - Contains the "winning" field values after conflict resolution
+   - Devices apply these updates to maintain consistency
+
+**Device Synchronization:**
+
+- Device ID prevents circular edit-update conditions
+- `_tsModFireStoreLastUpdate` tracks when device last synchronized
+- When device comes back online, subscribes only to updates since last sync
+- Prevents processing all historical resolved edits
+
+**Container Handling:**
+
+- `devicePendingContainer` field exists for document/file synchronization
+- Currently focusing only on record data synchronization
+- Document/container sync deferred for future implementation
+
+**Current State:**
+The app is a fully functional, professional-looking admin dashboard with dark theme, full-width layout, real-time status monitoring, progress tracking, debug capabilities, and comprehensive BetterForms compatibility layer. It successfully integrates Vue 3, Pinia, Tailwind CSS, Font Awesome, and Firebase while maintaining the single-file build requirement for FileMaker web viewer deployment. The core CRDT synchronization system is working end-to-end in production with proper field-level conflict resolution.

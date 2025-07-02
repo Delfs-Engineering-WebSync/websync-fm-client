@@ -1,7 +1,10 @@
 import { defineStore } from 'pinia'
+import { getUUID } from '../utils/betterFormsUtils'
 
 export const useAppConfigStore = defineStore('appConfig', {
   state: () => ({
+    // Session management (equivalent to model.idSession)
+    sessionId: getUUID(),
     // Mirroring the provided global app model structure
     activeJob: null,
     // configx will hold initial settings, some might be overridden by URL params
@@ -15,7 +18,7 @@ export const useAppConfigStore = defineStore('appConfig', {
     },
     device: {
       // This will be populated further, including by URL params via initializeConfig
-      id: null,
+      id: 'DEV_demo', // Default fallback like BetterForms
       deviceMode: 'passive',
       deviceType: 'webApp',
       tsModFireStoreLastUpdate: null,
@@ -46,12 +49,11 @@ export const useAppConfigStore = defineStore('appConfig', {
     isOnline: true,
     isProcessing: false, // For the isProcessing named action
     isUpdatingFM: false,
-    jobs: [],
     localFSInSync: '-',
     log: '---',
     organization: {
       // This will be populated further, including by URL params
-      id: null,
+      id: 'ORG_demo', // Default fallback like BetterForms
       // Other organization-specific properties from your global model can be added here
     },
     payload: {},

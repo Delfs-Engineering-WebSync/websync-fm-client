@@ -9,10 +9,10 @@ import { library } from '@fortawesome/fontawesome-svg-core'
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
 
 /* import specific icons */
-import { faUserSecret } from '@fortawesome/free-solid-svg-icons' // Example icon
+import { faArrowsSpin, faArrowsRotate } from '@fortawesome/free-solid-svg-icons'
 
 /* add icons to the library */
-library.add(faUserSecret) // Add more icons here as needed
+library.add(faArrowsSpin, faArrowsRotate)
 
 const app = createApp(App)
 

@@ -4,11 +4,7 @@ import {
   enableIndexedDbPersistence,
   doc,
   collection,
-  onSnapshot,
   setDoc,
-  orderBy,
-  where,
-  Timestamp, // Import Timestamp for creating Firestore Timestamp objects
 } from 'firebase/firestore'
 import { firebaseConfig } from './firebaseConfig' // Your Firebase project credentials
 import { useAppConfigStore } from './stores/appConfig'
@@ -17,38 +13,12 @@ let db = null
 let firebaseApp = null
 
 // To store unsubscribe functions for Firestore listeners
-let fsOrganizationRefUnsubscribe = null
-let fsDeviceRefUnsubscribe = null
 let fsUpdatesRefUnsubscribe = null
-let jobsRefUnsubscribe = null // For the jobs listener
 
 // References to Firestore documents/collections, will be initialized later
 let fsOrganizationDocRef = null
 let fsDeviceDocRef = null
 let fsUpdatesCollectionRef = null
-let jobsCollectionRef = null
-
-// Helper to simulate BF.namedAction calls if needed for logging or simple state changes
-// For complex named actions, they would be refactored into proper functions/Pinia actions.
-const BFNamedAction = (actionName, options) => {
-  console.log(`BFNamedAction Called: ${actionName}`, options || '')
-  const appConfig = useAppConfigStore() // Get store instance inside function where it's used
-
-  if (actionName === 'isProcessing') {
-    appConfig.startProcessing()
-    // The original BF 'isProcessing' also had a debounce and auto-false.
-    // For now, this just sets it to true. A corresponding call to endProcessing() would be needed.
-    // Or, implement a timeout here if automatic clearing is desired.
-    setTimeout(() => {
-      // Simple auto-clear example if no explicit endProcessing is called
-      if (appConfig.isProcessing) {
-        // appConfig.endProcessing();
-      }
-    }, 3000) // Auto clear after 3s for this example
-  }
-  // Add more simple named action handlers here if needed for direct translation
-  // Complex ones like 'FSUpdatesHandler' will be full Pinia actions.
-}
 
 async function checkParentDocuments() {
   const appConfig = useAppConfigStore()
@@ -106,7 +76,6 @@ export async function initializeFirebaseServices() {
       fsOrganizationDocRef = doc(db, 'Organizations', appConfig.organization.id)
       fsDeviceDocRef = doc(fsOrganizationDocRef, 'Devices', appConfig.device.id) // Uses fsOrganizationDocRef
       fsUpdatesCollectionRef = collection(fsOrganizationDocRef, 'Updates') // Uses fsOrganizationDocRef
-      // jobsCollectionRef = collection(db, "jobs_dev") // Not used for now
       console.log('Firestore document/collection references initialized.')
     } else {
       console.error(
@@ -127,13 +96,26 @@ async function setupFirestoreListenersAndChecks() {
   console.log('Setting up Firestore listeners and initial checks...')
   await checkParentDocuments() // Call the new function
 
-  // Placeholder for other functions
-  // subscribeToOrganization();
-  // subscribeToDevice();
-  // subscribeToUpdates();
+  // Make Firestore references available globally for BetterForms utilities
+  if (typeof window !== 'undefined') {
+    window.fsOrganizationRef = fsOrganizationDocRef
+    window.fsDeviceRef = fsDeviceDocRef
+    window.fsUpdatesRef = fsUpdatesCollectionRef
+    window.fsUpdatesRefUnsubscribe = fsUpdatesRefUnsubscribe
+    console.log('Firestore references exposed globally for BetterForms compatibility')
+  }
 
-  console.log('Placeholder: More listeners and checks will be added here.')
+  // Set up the updates subscription
+  try {
+    const { namedAction } = await import('./utils/betterFormsUtils')
+    const result = await namedAction('subscribeUpdates')
+    console.log('subscribeUpdates result:', result)
+  } catch (error) {
+    console.error('Error setting up updates subscription:', error)
+  }
+
+  console.log('Firestore listeners and checks setup complete.')
 }
 
 // We will define subscribeOrg, subscribeDevice, processSnapshot, subscribeUpdates,
-// and the jobs listener logic here incrementally.
+// and other listener logic here incrementally.

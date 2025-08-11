@@ -309,12 +309,19 @@ async function handleWebSyncReceivePayload(options) {
   const appConfig = useAppConfigStore()
   const payload = options.payload
 
+  log(`[DEBUG] webSyncReceivePayload called with options:`, 'info')
+  log(`[DEBUG] Options keys: ${Object.keys(options || {}).join(', ')}`, 'info')
+  log(`[DEBUG] Payload type: ${typeof payload}`, 'info')
+  log(`[DEBUG] Payload content: ${JSON.stringify(payload, null, 2)}`, 'info')
+
   if (!payload) {
+    log('[ERROR] No payload provided to webSyncReceivePayload', 'error')
     return Promise.resolve({ success: false, message: 'No payload provided' })
   }
 
   // Handle status ping
   if (payload.status) {
+    log('[DEBUG] Status ping received, acknowledging', 'info')
     if (typeof fmBridgit !== 'undefined') {
       fmBridgit.returnResult({ status: 'ok' })
     }
@@ -323,63 +330,140 @@ async function handleWebSyncReceivePayload(options) {
 
   // Process edits if they exist
   if (payload.edits && Array.isArray(payload.edits)) {
-    log(`Payload received from FM (${JSON.stringify(payload).length} bytes)`, 'info')
+    log(`[DEBUG] Processing ${payload.edits.length} edits from FileMaker`, 'info')
+    log(`[DEBUG] Edits array: ${JSON.stringify(payload.edits, null, 2)}`, 'info')
 
-    // Wait for Firebase to be ready (simplified version)
+    // Wait for Firebase to be ready
     let counter = 0
     const maxAttempts = 5
 
     while (counter < maxAttempts) {
-      // Check if we have Firebase references (this would be set by firebaseInit)
-      if (window.fsDeviceRef) {
-        // Process each edit
-        payload.edits.forEach((edit) => {
-          // Add edit to Firestore (simplified - in real implementation this would use proper Firebase v9 syntax)
-          log('Processing edit for Firestore', 'info')
+      log(`[DEBUG] Firebase readiness check attempt ${counter + 1}/${maxAttempts}`, 'info')
 
-          if (edit.typeEdit === 'containerIsUploaded') {
-            appConfig.editsContainersComplete += 1
-          }
-        })
+      // Check if we have Firebase references
+      if (window.fsDeviceRef && window.fsOrganizationRef) {
+        log('[DEBUG] Firebase references available, proceeding with edit processing', 'info')
 
-        // Update edit state
-        appConfig.editsCurrentState = '4'
+        try {
+          // Process each edit and create Firestore documents
+          for (const edit of payload.edits) {
+            log(`[DEBUG] Processing edit: ${JSON.stringify(edit, null, 2)}`, 'info')
 
-        // Reset counters when complete
-        if (appConfig.editsContainersComplete === appConfig.editsContainersTotal) {
-          appConfig.editsContainersComplete = 0
-          appConfig.editsContainersTotal = 0
-        }
+            // Create edit document in Firestore
+            const editData = {
+              id: edit.id || `edit_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              _table: edit.table || 'UnknownTable',
+              _tsModFireStore: new Date(),
+              _ts: {},
+              _contexts: appConfig.device.contexts || [],
+              ...edit, // Include all edit fields
+            }
 
-        // Return success to FileMaker with timestamp if provided
-        const response = {
-          payload: payload.modificationTimestampUTCEnd
-            ? {
-                modificationTimestampUTCEnd: payload.modificationTimestampUTCEnd,
+            log(
+              `[DEBUG] Prepared edit data for Firestore: ${JSON.stringify(editData, null, 2)}`,
+              'info',
+            )
+
+            // Add to Firestore collection
+            try {
+              const { doc, setDoc } = await import('firebase/firestore')
+              const editRef = doc(window.fsOrganizationRef, 'Edits', editData.id)
+
+              log(
+                `[DEBUG] Creating Firestore document at: Organizations/${appConfig.organization.id}/Edits/${editData.id}`,
+                'info',
+              )
+
+              await setDoc(editRef, editData)
+              log(
+                `[DEBUG] Successfully created Firestore document for edit: ${editData.id}`,
+                'info',
+              )
+
+              // Update local state
+              if (edit.typeEdit === 'containerIsUploaded') {
+                appConfig.editsContainersComplete += 1
+                log(
+                  `[DEBUG] Updated container completion count: ${appConfig.editsContainersComplete}`,
+                  'info',
+                )
               }
-            : {},
-        }
+            } catch (firestoreError) {
+              log(
+                `[ERROR] Failed to create Firestore document for edit ${editData.id}: ${firestoreError.message}`,
+                'error',
+              )
+              log(
+                `[ERROR] Firestore error details: ${JSON.stringify(firestoreError, null, 2)}`,
+                'error',
+              )
+            }
+          }
 
-        if (typeof fmBridgit !== 'undefined') {
-          fmBridgit.returnResult(response)
-        }
+          // Update edit state
+          appConfig.editsCurrentState = '4'
+          log(`[DEBUG] Updated edit state to: ${appConfig.editsCurrentState}`, 'info')
 
-        return Promise.resolve({ success: true, message: 'Payload processed successfully' })
+          // Reset counters when complete
+          if (appConfig.editsContainersComplete === appConfig.editsContainersTotal) {
+            appConfig.editsContainersComplete = 0
+            appConfig.editsContainersTotal = 0
+            log('[DEBUG] Reset container counters', 'info')
+          }
+
+          // Return success to FileMaker with timestamp if provided
+          const response = {
+            payload: payload.modificationTimestampUTCEnd
+              ? {
+                  modificationTimestampUTCEnd: payload.modificationTimestampUTCEnd,
+                }
+              : {},
+          }
+
+          log(
+            `[DEBUG] Returning success response to FileMaker: ${JSON.stringify(response, null, 2)}`,
+            'info',
+          )
+
+          if (typeof fmBridgit !== 'undefined') {
+            fmBridgit.returnResult(response)
+            log('[DEBUG] Result returned to FileMaker via fmBridgit', 'info')
+          }
+
+          return Promise.resolve({ success: true, message: 'Payload processed successfully' })
+        } catch (processingError) {
+          log(`[ERROR] Error processing edits: ${processingError.message}`, 'error')
+          log(
+            `[ERROR] Processing error details: ${JSON.stringify(processingError, null, 2)}`,
+            'error',
+          )
+          return Promise.resolve({
+            success: false,
+            message: `Processing error: ${processingError.message}`,
+          })
+        }
       } else {
         counter++
-        log(`FS not ready yet, attempt: ${counter}`, 'warn')
+        log(`[WARN] Firebase not ready yet, attempt: ${counter}/${maxAttempts}`, 'warn')
+        log(`[DEBUG] fsDeviceRef available: ${!!window.fsDeviceRef}`, 'info')
+        log(`[DEBUG] fsOrganizationRef available: ${!!window.fsOrganizationRef}`, 'info')
 
         if (counter >= maxAttempts) {
-          log('webSync Timeout - Firebase not ready', 'error')
+          log('[ERROR] webSync Timeout - Firebase not ready after maximum attempts', 'error')
           return Promise.resolve({ success: false, message: 'Firebase timeout' })
         }
 
         // Wait 1 second before retry
+        log(`[DEBUG] Waiting 1 second before retry...`, 'info')
         await new Promise((resolve) => setTimeout(resolve, 1000))
       }
     }
+  } else {
+    log('[WARN] No edits array found in payload', 'warn')
+    log(`[DEBUG] Payload keys: ${Object.keys(payload).join(', ')}`, 'info')
   }
 
+  log('[DEBUG] webSyncReceivePayload completed without processing edits', 'info')
   return Promise.resolve({ success: false, message: 'No edits to process' })
 }
 

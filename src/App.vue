@@ -8,6 +8,7 @@ import { onMounted, ref, computed } from 'vue'
 const appConfig = useAppConfigStore()
 const firebaseStatus = ref('Initializing...')
 const showDebugControls = ref(false)
+const isOnline = ref(navigator.onLine)
 
 // Computed properties for progress calculations
 const editsProgress = computed(() => {
@@ -27,6 +28,7 @@ const updatesContainersProgress = computed(() => {
 
 // Status computed properties
 const connectionStatus = computed(() => {
+  if (!isOnline.value) return 'offline'
   if (firebaseStatus.value.includes('successfully')) return 'connected'
   if (firebaseStatus.value.includes('error')) return 'error'
   return 'connecting'
@@ -53,6 +55,17 @@ onMounted(async () => {
     firebaseStatus.value = `Connection failed: ${error.message}`
     console.error('Firebase initialization error:', error)
   }
+
+  // Set up network connectivity monitoring
+  window.addEventListener('online', () => {
+    isOnline.value = true
+    console.log('Network: Online')
+  })
+
+  window.addEventListener('offline', () => {
+    isOnline.value = false
+    console.log('Network: Offline')
+  })
 })
 
 // Test methods for debug panel
@@ -236,18 +249,18 @@ const simulateFirestoreUpdate = async () => {
 
     <!-- TOP NAVIGATION BAR -->
     <nav class="w-full bg-gray-800 border-b border-gray-700 sticky top-0 z-30">
-      <div class="px-0 py-6">
+      <div class="px-0 py-3">
         <div class="flex items-center justify-between px-4">
           <!-- Logo/Brand -->
-          <div class="flex items-center space-x-6">
-            <div class="flex items-center space-x-4">
-              <div class="p-3 bg-blue-600 rounded-xl">
+          <div class="flex items-center space-x-4">
+            <div class="flex items-center space-x-3">
+              <div class="p-2 bg-blue-600 rounded-lg">
                 <font-awesome-icon :icon="['fas', 'arrows-rotate']"
-                  :class="appConfig.isProcessing ? 'animate-spin' : ''" class="text-white text-2xl" />
+                  :class="appConfig.isProcessing ? 'animate-spin' : ''" class="text-white text-lg" />
               </div>
               <div>
-                <h1 class="text-2xl font-bold text-white">WebSync</h1>
-                <p class="text-sm text-gray-400 mt-1">Admin Dashboard</p>
+                <h1 class="text-lg font-bold text-white">WebSync</h1>
+                <p class="text-xs text-gray-400">Admin Dashboard</p>
               </div>
             </div>
           </div>
@@ -258,12 +271,16 @@ const simulateFirestoreUpdate = async () => {
             <div class="flex items-center space-x-3">
               <div :class="{
                 'bg-green-500': connectionStatus === 'connected',
-                'bg-red-500': connectionStatus === 'error',
+                'bg-red-500': connectionStatus === 'error' || connectionStatus === 'offline',
                 'bg-yellow-500': connectionStatus === 'connecting'
               }" class="w-3 h-3 rounded-full"></div>
               <span class="text-sm text-gray-300 font-medium">
-                {{ connectionStatus === 'connected' ? 'Connected' : connectionStatus === 'error' ? 'Error' :
-                  'Connecting' }}
+                {{
+                  connectionStatus === 'connected' ? 'Connected' :
+                    connectionStatus === 'offline' ? 'Offline' :
+                      connectionStatus === 'error' ? 'Error' :
+                        'Connecting'
+                }}
               </span>
             </div>
 
@@ -295,128 +312,129 @@ const simulateFirestoreUpdate = async () => {
     </nav>
 
     <!-- MAIN DASHBOARD CONTENT -->
-    <div class="w-full overflow-x-hidden">
+    <div class="w-full overflow-x-hidden pb-4">
 
       <!-- SYNC OPERATIONS SECTION -->
       <div class="px-0 py-4">
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 px-4 mb-4">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 px-4">
 
           <!-- EDITS PANEL -->
-          <div class="bg-gray-800 border border-gray-700 rounded-2xl p-6">
-            <div class="flex items-center justify-between mb-6">
-              <div class="flex items-center space-x-4">
-                <div class="p-3 bg-blue-600 bg-opacity-20 rounded-xl">
-                  <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4">
+            <div class="flex items-center justify-between mb-4">
+              <div class="flex items-center space-x-3">
+                <div class="p-2 bg-blue-600 bg-opacity-20 rounded-lg">
+                  <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                       d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
                   </svg>
                 </div>
                 <div>
-                  <h2 class="text-xl font-bold text-white">Data Uploads</h2>
-                  <p class="text-sm text-gray-400 mt-1">Local to Cloud Sync</p>
+                  <h2 class="text-lg font-bold text-white">Data Uploads</h2>
+                  <p class="text-xs text-gray-400">Local to Cloud Sync</p>
                 </div>
               </div>
-              <div class="px-3 py-1 bg-blue-600 bg-opacity-20 rounded-full">
+              <div class="px-2 py-1 bg-blue-600 bg-opacity-20 rounded-full">
                 <span class="text-xs font-semibold text-blue-400 uppercase tracking-wide">EDITS</span>
               </div>
             </div>
 
-            <div class="mb-4">
-              <p class="text-base text-gray-300">
+            <div class="mb-3">
+              <p class="text-sm text-gray-300">
                 {{ !appConfig.editsTotalPending ? appConfig.editsStates[appConfig.editsCurrentState] :
                   appConfig.editsStates[appConfig.editsCurrentState] + ": " + appConfig.editsTotalPending }}
               </p>
             </div>
 
             <!-- Uploading Progress -->
-            <div v-if="appConfig.editsContainersTotal" class="space-y-4">
+            <div v-if="appConfig.editsContainersTotal" class="space-y-3">
               <div class="flex justify-between items-center">
-                <span class="text-gray-300 font-medium">Container Upload Progress</span>
-                <span class="text-blue-400 font-bold">{{ editsProgress }}%</span>
+                <span class="text-gray-300 text-sm">Container Upload Progress</span>
+                <span class="text-blue-400 font-bold text-sm">{{ editsProgress }}%</span>
               </div>
-              <div class="w-full bg-gray-700 rounded-full h-2">
+              <div class="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
                 <div
-                  class="bg-gradient-to-r from-blue-500 to-blue-400 h-2 rounded-full transition-all duration-700 ease-out"
-                  :style="`width: ${editsProgress}%`"></div>
+                  class="bg-gradient-to-r from-blue-500 to-blue-400 h-1.5 rounded-full transition-all duration-700 ease-out"
+                  :style="`width: ${Math.min(editsProgress, 100)}%`"></div>
               </div>
-              <div class="flex justify-between text-sm text-gray-400">
+              <div class="flex justify-between text-xs text-gray-400">
                 <span>{{ appConfig.editsContainersComplete }} completed</span>
                 <span>{{ appConfig.editsContainersTotal }} total</span>
               </div>
             </div>
 
-            <div v-else class="text-center py-8 text-gray-500">
-              <svg class="w-12 h-12 mx-auto mb-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div v-else class="text-center py-4 text-gray-500">
+              <svg class="w-8 h-8 mx-auto mb-2 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                   d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
               </svg>
-              <p class="text-base">No pending uploads</p>
+              <p class="text-sm">No pending uploads</p>
             </div>
           </div>
 
           <!-- UPDATES PANEL -->
-          <div class="bg-gray-800 border border-gray-700 rounded-2xl p-6">
-            <div class="flex items-center justify-between mb-6">
-              <div class="flex items-center space-x-4">
-                <div class="p-3 bg-green-600 bg-opacity-20 rounded-xl">
-                  <svg class="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4">
+            <div class="flex items-center justify-between mb-4">
+              <div class="flex items-center space-x-3">
+                <div class="p-2 bg-green-600 bg-opacity-20 rounded-lg">
+                  <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                      d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 12l2 2 4-4"></path>
+                      d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z">
+                    </path>
                   </svg>
                 </div>
                 <div>
-                  <h2 class="text-xl font-bold text-white">Data Downloads</h2>
-                  <p class="text-sm text-gray-400 mt-1">Cloud to Local Sync</p>
+                  <h2 class="text-lg font-bold text-white">Data Downloads</h2>
+                  <p class="text-xs text-gray-400">Cloud to Local Sync</p>
                 </div>
               </div>
-              <div class="px-3 py-1 bg-green-600 bg-opacity-20 rounded-full">
+              <div class="px-2 py-1 bg-green-600 bg-opacity-20 rounded-full">
                 <span class="text-xs font-semibold text-green-400 uppercase tracking-wide">UPDATES</span>
               </div>
             </div>
 
-            <div v-if="appConfig.updatesTotal" class="space-y-6">
+            <div v-if="appConfig.updatesTotal" class="space-y-4">
               <!-- Main Updates Progress -->
-              <div class="space-y-4">
+              <div class="space-y-3">
                 <div class="flex justify-between items-center">
-                  <span class="text-gray-300 font-medium">Download Progress</span>
-                  <span class="text-green-400 font-bold">{{ updatesProgress }}%</span>
+                  <span class="text-gray-300 text-sm">Download Progress</span>
+                  <span class="text-green-400 font-bold text-sm">{{ updatesProgress }}%</span>
                 </div>
-                <div class="w-full bg-gray-700 rounded-full h-2">
+                <div class="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
                   <div
-                    class="bg-gradient-to-r from-green-500 to-green-400 h-2 rounded-full transition-all duration-700 ease-out"
-                    :style="`width: ${updatesProgress}%`"></div>
+                    class="bg-gradient-to-r from-green-500 to-green-400 h-1.5 rounded-full transition-all duration-700 ease-out"
+                    :style="`width: ${Math.min(updatesProgress, 100)}%`"></div>
                 </div>
-                <div class="flex justify-between text-sm text-gray-400">
+                <div class="flex justify-between text-xs text-gray-400">
                   <span>{{ appConfig.updatesTotalCompleted }} completed</span>
                   <span>{{ appConfig.updatesTotal }} total</span>
                 </div>
               </div>
 
               <!-- Container Downloads -->
-              <div v-if="appConfig.updateTotalContainers" class="border-t border-gray-700 pt-4 space-y-4">
+              <div v-if="appConfig.updateTotalContainers" class="border-t border-gray-700 pt-3 space-y-3">
                 <div class="flex justify-between items-center">
-                  <span class="text-gray-300 font-medium">Container Downloads</span>
-                  <span class="text-green-400 font-bold">{{ updatesContainersProgress }}%</span>
+                  <span class="text-gray-300 text-sm">Container Downloads</span>
+                  <span class="text-green-400 font-bold text-sm">{{ updatesContainersProgress }}%</span>
                 </div>
-                <div class="w-full bg-gray-700 rounded-full h-2">
+                <div class="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
                   <div
-                    class="bg-gradient-to-r from-green-500 to-green-400 h-2 rounded-full transition-all duration-700 ease-out"
-                    :style="`width: ${updatesContainersProgress}%`"></div>
+                    class="bg-gradient-to-r from-green-500 to-green-400 h-1.5 rounded-full transition-all duration-700 ease-out"
+                    :style="`width: ${Math.min(updatesContainersProgress, 100)}%`"></div>
                 </div>
-                <div class="flex justify-between text-sm text-gray-400">
+                <div class="flex justify-between text-xs text-gray-400">
                   <span>{{ appConfig.updateCompletedContainers }} completed</span>
                   <span>{{ appConfig.updateTotalContainers }} total</span>
                 </div>
               </div>
             </div>
 
-            <div v-else class="text-center py-8">
-              <svg class="w-12 h-12 mx-auto mb-3 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div v-else class="text-center py-4">
+              <svg class="w-8 h-8 mx-auto mb-2 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                   d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
               </svg>
-              <p class="text-green-400 font-semibold">System Up to Date</p>
-              <p class="text-sm text-gray-400 mt-1">All data synchronized</p>
+              <p class="text-green-400 font-semibold text-sm">System Up to Date</p>
+              <p class="text-xs text-gray-400">All data synchronized</p>
             </div>
           </div>
 
@@ -424,90 +442,93 @@ const simulateFirestoreUpdate = async () => {
       </div>
 
       <!-- SYSTEM OVERVIEW CARDS -->
-      <div class="px-0 py-0">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-8 px-4">
+      <div class="px-0 py-2">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 px-4">
           <!-- Device Info Card -->
-          <div class="bg-gray-800 border border-gray-700 rounded-2xl p-8">
-            <div class="flex items-center justify-between mb-6">
-              <h3 class="text-xl font-semibold text-white">Device Info</h3>
-              <div class="p-3 bg-blue-600 bg-opacity-20 rounded-xl">
-                <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-lg font-semibold text-white">Device Info</h3>
+              <div class="p-2 bg-blue-600 bg-opacity-20 rounded-lg">
+                <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                     d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z">
                   </path>
                 </svg>
               </div>
             </div>
-            <div class="space-y-4">
+            <div class="space-y-3">
               <div class="flex justify-between items-center">
-                <span class="text-gray-400 text-sm">ID:</span>
-                <span class="text-white font-mono font-medium">{{ appConfig.device.id }}</span>
+                <span class="text-gray-400 text-xs">ID:</span>
+                <span class="text-white font-mono text-sm">{{ appConfig.device.id }}</span>
               </div>
               <div class="flex justify-between items-center">
-                <span class="text-gray-400 text-sm">Mode:</span>
-                <span class="px-3 py-1 bg-gray-700 rounded-lg text-sm text-white font-medium">{{
+                <span class="text-gray-400 text-xs">Mode:</span>
+                <span class="px-2 py-1 bg-gray-700 rounded text-xs text-white font-medium">{{
                   appConfig.device.deviceMode }}</span>
               </div>
               <div class="flex justify-between items-center">
-                <span class="text-gray-400 text-sm">Type:</span>
-                <span class="text-white font-medium">{{ appConfig.device.deviceType }}</span>
+                <span class="text-gray-400 text-xs">Type:</span>
+                <span class="text-white text-sm">{{ appConfig.device.deviceType }}</span>
               </div>
             </div>
           </div>
 
           <!-- Organization Card -->
-          <div class="bg-gray-800 border border-gray-700 rounded-2xl p-8">
-            <div class="flex items-center justify-between mb-6">
-              <h3 class="text-xl font-semibold text-white">Organization</h3>
-              <div class="p-3 bg-green-600 bg-opacity-20 rounded-xl">
-                <svg class="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-lg font-semibold text-white">Organization</h3>
+              <div class="p-2 bg-green-600 bg-opacity-20 rounded-lg">
+                <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                     d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4">
                   </path>
                 </svg>
               </div>
             </div>
-            <div class="space-y-4">
+            <div class="space-y-3">
               <div class="flex justify-between items-center">
-                <span class="text-gray-400 text-sm">ID:</span>
-                <span class="text-white font-mono font-medium">{{ appConfig.organization.id }}</span>
+                <span class="text-gray-400 text-xs">ID:</span>
+                <span class="text-white font-mono text-sm">{{ appConfig.organization.id }}</span>
               </div>
               <div class="flex justify-between items-center">
-                <span class="text-gray-400 text-sm">Contexts:</span>
-                <span class="text-white font-medium">{{ appConfig.device.contexts.length }}</span>
+                <span class="text-gray-400 text-xs">Contexts:</span>
+                <span class="text-white text-sm">{{ appConfig.device.contexts.length }}</span>
               </div>
             </div>
           </div>
 
           <!-- System Status Card -->
-          <div class="bg-gray-800 border border-gray-700 rounded-2xl p-8">
-            <div class="flex items-center justify-between mb-6">
-              <h3 class="text-xl font-semibold text-white">System Status</h3>
-              <div class="p-3 bg-purple-600 bg-opacity-20 rounded-xl">
-                <svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-lg font-semibold text-white">System Status</h3>
+              <div class="p-2 bg-purple-600 bg-opacity-20 rounded-lg">
+                <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                     d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2h-2a2 2 0 00-2-2z">
                   </path>
                 </svg>
               </div>
             </div>
-            <div class="space-y-4">
+            <div class="space-y-3">
               <div class="flex items-center justify-between">
-                <span class="text-gray-400 text-sm">Database:</span>
+                <span class="text-gray-400 text-xs">Database:</span>
                 <div class="flex items-center space-x-2">
                   <div :class="{
                     'bg-green-500': connectionStatus === 'connected',
-                    'bg-red-500': connectionStatus === 'error',
+                    'bg-red-500': connectionStatus === 'error' || connectionStatus === 'offline',
                     'bg-yellow-500': connectionStatus === 'connecting'
                   }" class="w-2 h-2 rounded-full"></div>
-                  <span class="text-white text-sm font-medium">{{ connectionStatus === 'connected' ? 'Online' :
-                    'Offline'
-                    }}</span>
+                  <span class="text-white text-xs font-medium">{{
+                    connectionStatus === 'connected' ? 'Online' :
+                      connectionStatus === 'offline' ? 'Offline' :
+                        connectionStatus === 'error' ? 'Error' :
+                          'Connecting'
+                  }}</span>
                 </div>
               </div>
               <div class="flex items-center justify-between">
-                <span class="text-gray-400 text-sm">Processing:</span>
-                <span :class="appConfig.isProcessing ? 'text-yellow-400' : 'text-gray-400'" class="text-sm font-medium">
+                <span class="text-gray-400 text-xs">Processing:</span>
+                <span :class="appConfig.isProcessing ? 'text-yellow-400' : 'text-gray-400'" class="text-xs font-medium">
                   {{ appConfig.isProcessing ? 'Active' : 'Idle' }}
                 </span>
               </div>
@@ -519,9 +540,10 @@ const simulateFirestoreUpdate = async () => {
     </div>
 
     <!-- DEBUG PANEL OVERLAY -->
-    <div v-if="showDebugControls" class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4"
+    <div v-if="showDebugControls"
+      class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-start justify-center p-4 overflow-y-auto"
       @click="showDebugControls = false">
-      <div class="bg-gray-800 border border-gray-700 rounded-2xl p-8 w-full max-w-lg" @click.stop>
+      <div class="bg-gray-800 border border-gray-700 rounded-2xl p-8 w-full max-w-lg my-8" @click.stop>
         <div class="flex items-center justify-between mb-8">
           <h3 class="text-xl font-bold text-white">Debug Controls</h3>
           <button @click="showDebugControls = false" class="text-gray-400 hover:text-white">

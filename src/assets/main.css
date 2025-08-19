@@ -3,7 +3,7 @@
 /* Prevent horizontal scrolling and bounce scrolling */
 html,
 body {
-  overflow-x: hidden;
+  overflow-x: auto;
   width: 100%;
   max-width: 100%;
   overscroll-behavior: none;
@@ -12,10 +12,6 @@ body {
 
 /* Prevent bounce scrolling on the main container */
 body {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  position: static;
   overflow-y: auto;
 }

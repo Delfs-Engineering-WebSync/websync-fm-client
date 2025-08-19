@@ -68,6 +68,40 @@ onMounted(async () => {
   })
 })
 
+// Quick Actions — placeholder handlers that will later run FileMaker scripts
+const openWebSyncConfig = async () => {
+  console.log('Quick Action: Open WebSync Config')
+  try {
+    await fmBridgit.performScript('Open WebSync Config', JSON.stringify({ source: 'WebApp' }), {
+      fireAndForget: true,
+    })
+  } catch (error) {
+    console.error('WebSync Config script error:', error)
+  }
+}
+
+const openWebSyncEdits = async () => {
+  console.log('Quick Action: Open WebSync Edits')
+  try {
+    await fmBridgit.performScript('Open Edits', JSON.stringify({ source: 'WebApp' }), {
+      fireAndForget: true,
+    })
+  } catch (error) {
+    console.error('WebSync Edits script error:', error)
+  }
+}
+
+const runWebSyncNow = async () => {
+  console.log('Quick Action: Run Sync Now')
+  try {
+    await fmBridgit.performScript('Start Sync', JSON.stringify({ source: 'WebApp' }), {
+      fireAndForget: true,
+    })
+  } catch (error) {
+    console.error('Run Sync script error:', error)
+  }
+}
+
 // Test methods for debug panel
 const testFSUpdatesHandler = async () => {
   console.log('Testing FSUpdatesHandler...')
@@ -245,12 +279,12 @@ const simulateFirestoreUpdate = async () => {
 </script>
 
 <template>
-  <div class="min-h-screen w-full bg-gray-900 text-gray-100 overflow-x-hidden">
+  <div class="min-h-screen w-full bg-gray-900 text-gray-100 overflow-x-auto">
 
     <!-- TOP NAVIGATION BAR -->
     <nav class="w-full bg-gray-800 border-b border-gray-700 sticky top-0 z-30">
       <div class="px-0 py-3">
-        <div class="flex items-center justify-between px-4">
+        <div class="flex items-center justify-between px-3 sm:px-4 max-w-screen-2xl mx-auto">
           <!-- Logo/Brand -->
           <div class="flex items-center space-x-4">
             <div class="flex items-center space-x-3">
@@ -260,13 +294,14 @@ const simulateFirestoreUpdate = async () => {
               </div>
               <div>
                 <h1 class="text-lg font-bold text-white">WebSync</h1>
-                <p class="text-xs text-gray-400">Admin Dashboard</p>
+                <p class="text-xs text-gray-400">Dashboard</p>
               </div>
             </div>
           </div>
 
+
           <!-- Status Indicators -->
-          <div class="flex items-center space-x-8">
+          <div class="flex items-center space-x-6">
             <!-- Connection Status -->
             <div class="flex items-center space-x-3">
               <div :class="{
@@ -294,6 +329,36 @@ const simulateFirestoreUpdate = async () => {
               <span class="text-sm text-gray-300 font-medium capitalize">{{ systemStatus }}</span>
             </div>
 
+            <!-- Secondary Actions: Config + Edits -->
+            <div class="hidden md:flex items-center space-x-2">
+              <button @click="openWebSyncConfig"
+                class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-700/70 bg-transparent hover:bg-gray-700/40 text-gray-300 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-500"
+                aria-label="Open WebSync Config" title="Open WebSync Config">
+                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <path
+                    d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                <span class="text-xs font-medium">webSync Config</span>
+              </button>
+
+              <button @click="openWebSyncEdits"
+                class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-700/70 bg-transparent hover:bg-gray-700/40 text-gray-300 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-500"
+                aria-label="Open WebSync Edits" title="Open WebSync Edits">
+                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M8 6h13" />
+                  <path d="M8 12h13" />
+                  <path d="M8 18h13" />
+                  <path d="M3 6h.01" />
+                  <path d="M3 12h.01" />
+                  <path d="M3 18h.01" />
+                </svg>
+                <span class="text-xs font-medium">WebSync Edits</span>
+              </button>
+            </div>
+
             <!-- Debug Toggle -->
             <button @click="showDebugControls = !showDebugControls"
               class="p-3 text-gray-400 hover:text-white hover:bg-gray-700 rounded-xl transition-colors"
@@ -306,20 +371,34 @@ const simulateFirestoreUpdate = async () => {
                   d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
               </svg>
             </button>
+
+            <!-- Primary Sync Button at far right -->
+            <button @click="runWebSyncNow"
+              class="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              aria-label="Run Sync" title="Run Sync">
+              <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12a9 9 0 10-6.219 8.56" />
+                <path d="M22 12l-3-3-3 3" />
+              </svg>
+              <span class="text-xs">Sync</span>
+            </button>
           </div>
         </div>
       </div>
     </nav>
 
     <!-- MAIN DASHBOARD CONTENT -->
-    <div class="w-full overflow-x-hidden pb-4">
+    <div class="w-full pb-4 px-2 sm:px-0">
+
+
 
       <!-- SYNC OPERATIONS SECTION -->
       <div class="px-0 py-4">
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 px-4">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 px-3 sm:px-4 max-w-screen-2xl mx-auto">
 
           <!-- EDITS PANEL -->
-          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4">
+          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4 min-w-0">
             <div class="flex items-center justify-between mb-4">
               <div class="flex items-center space-x-3">
                 <div class="p-2 bg-blue-600 bg-opacity-20 rounded-lg">
@@ -368,11 +447,12 @@ const simulateFirestoreUpdate = async () => {
                   d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
               </svg>
               <p class="text-sm">No pending uploads</p>
+              <p class="text-xs text-gray-400 invisible">placeholder</p>
             </div>
           </div>
 
           <!-- UPDATES PANEL -->
-          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4">
+          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4 min-w-0">
             <div class="flex items-center justify-between mb-4">
               <div class="flex items-center space-x-3">
                 <div class="p-2 bg-green-600 bg-opacity-20 rounded-lg">
@@ -390,6 +470,13 @@ const simulateFirestoreUpdate = async () => {
               <div class="px-2 py-1 bg-green-600 bg-opacity-20 rounded-full">
                 <span class="text-xs font-semibold text-green-400 uppercase tracking-wide">UPDATES</span>
               </div>
+            </div>
+
+            <!-- Status line to mirror the uploads panel spacing -->
+            <div class="mb-3">
+              <p class="text-sm text-gray-300">
+                {{ appConfig.updatesTotal ? 'Receiving Updates' : 'No New Updates' }}
+              </p>
             </div>
 
             <div v-if="appConfig.updatesTotal" class="space-y-4">
@@ -443,7 +530,7 @@ const simulateFirestoreUpdate = async () => {
 
       <!-- SYSTEM OVERVIEW CARDS -->
       <div class="px-0 py-2">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 px-4">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 px-3 sm:px-4 max-w-screen-2xl mx-auto">
           <!-- Device Info Card -->
           <div class="bg-gray-800 border border-gray-700 rounded-xl p-4">
             <div class="flex items-center justify-between mb-4">
@@ -545,7 +632,7 @@ const simulateFirestoreUpdate = async () => {
       @click="showDebugControls = false">
       <div class="bg-gray-800 border border-gray-700 rounded-2xl p-8 w-full max-w-lg my-8" @click.stop>
         <div class="flex items-center justify-between mb-8">
-          <h3 class="text-xl font-bold text-white">Debug Controls</h3>
+          <h3 class="text-xl font-bold text-white">Developer Debugging Controls</h3>
           <button @click="showDebugControls = false" class="text-gray-400 hover:text-white">
             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>

@@ -66,6 +66,9 @@ export async function initializeFirebaseServices() {
     console.log('Initializing Firebase app...')
     firebaseApp = initializeApp(firebaseConfig)
     db = getFirestore(firebaseApp)
+    try {
+      console.log('Using Firebase project:', firebaseApp?.options?.projectId)
+    } catch {}
 
     console.log('Enabling Firestore offline persistence...')
     await enableIndexedDbPersistence(db)

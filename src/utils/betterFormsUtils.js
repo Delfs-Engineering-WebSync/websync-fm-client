@@ -200,6 +200,13 @@ async function sendUpdatesToDatabase(appConfig) {
     return { success: false, error: error.message }
   } finally {
     appConfig.isUpdatingFM = false
+    // Always stop processing spinner when loop completes or errors
+    try {
+      appConfig.endProcessing()
+      log('sendUpdatesToDatabase - processing ended', 'info')
+    } catch {
+      /* no-op */
+    }
   }
 }
 
@@ -254,54 +261,153 @@ function updatesBatchesObject(batch, appConfig) {
 }
 
 // Handle editsUpdateStatus action
-function handleEditsUpdateStatus(options) {
+async function handleEditsUpdateStatus(options) {
   const appConfig = useAppConfigStore()
 
-  if (options.currentState) {
-    appConfig.editsCurrentState = options.currentState
-  }
+  log(
+    `[DEBUG] handleEditsUpdateStatus called with options: ${JSON.stringify(options, null, 2)}`,
+    'info',
+  )
+  log(`[DEBUG] Current appConfig state before update:`, 'info')
+  log(`[DEBUG] - editsCurrentState: ${appConfig.editsCurrentState}`, 'info')
+  log(`[DEBUG] - editsTotalPending: ${appConfig.editsTotalPending}`, 'info')
 
-  if (typeof options.pendingEdits !== 'undefined') {
-    appConfig.editsTotalPending = options.pendingEdits
-  }
+  try {
+    if (options.currentState) {
+      log(
+        `[DEBUG] Updating editsCurrentState from ${appConfig.editsCurrentState} to ${options.currentState}`,
+        'info',
+      )
+      appConfig.editsCurrentState = options.currentState
+    }
 
-  // Return success to FileMaker
-  if (typeof fmBridgit !== 'undefined') {
-    fmBridgit.returnResult({ status: 'ok' })
-  }
+    if (typeof options.pendingEdits !== 'undefined') {
+      log(
+        `[DEBUG] Updating editsTotalPending from ${appConfig.editsTotalPending} to ${options.pendingEdits}`,
+        'info',
+      )
+      appConfig.editsTotalPending = options.pendingEdits
+    }
 
-  return Promise.resolve({ success: true, message: 'Edit status updated' })
+    log(`[DEBUG] Final appConfig state after update:`, 'info')
+    log(`[DEBUG] - editsCurrentState: ${appConfig.editsCurrentState}`, 'info')
+    log(`[DEBUG] - editsTotalPending: ${appConfig.editsTotalPending}`, 'info')
+
+    // Return success to FileMaker
+    if (typeof fmBridgit !== 'undefined') {
+      log(`[DEBUG] fmBridgit available, calling returnResult with status: ok`, 'info')
+      try {
+        const result = await fmBridgit.returnResult({ status: 'ok' })
+        log(
+          `[DEBUG] fmBridgit.returnResult completed successfully: ${JSON.stringify(result)}`,
+          'info',
+        )
+      } catch (error) {
+        log(`[WARN] fmBridgit.returnResult failed: ${error.message}`, 'warn')
+        log(`[WARN] This is expected behavior - FileMaker may reject some acknowledgments`, 'warn')
+        // Continue execution even if FileMaker acknowledgment fails
+      }
+    } else {
+      log(`[WARN] fmBridgit not available for returnResult`, 'warn')
+    }
+
+    const result = { success: true, message: 'Edit status updated' }
+    log(`[DEBUG] handleEditsUpdateStatus returning: ${JSON.stringify(result, null, 2)}`, 'info')
+    return Promise.resolve(result)
+  } catch (error) {
+    log(`[ERROR] Error in handleEditsUpdateStatus: ${error.message}`, 'error')
+    log(`[ERROR] Error stack: ${error.stack}`, 'error')
+    const errorResult = { success: false, error: error.message }
+    log(
+      `[DEBUG] handleEditsUpdateStatus returning error: ${JSON.stringify(errorResult, null, 2)}`,
+      'info',
+    )
+    return Promise.resolve(errorResult)
+  }
 }
 
 // Handle updatesContainerDownloads action
-function handleUpdatesContainerDownloads(options) {
+async function handleUpdatesContainerDownloads(options) {
   const appConfig = useAppConfigStore()
 
-  if (typeof options?.updates?.totalContainers !== 'undefined') {
-    appConfig.updateTotalContainers += options.updates.totalContainers
-  }
+  log(
+    `[DEBUG] handleUpdatesContainerDownloads called with options: ${JSON.stringify(options, null, 2)}`,
+    'info',
+  )
+  log(`[DEBUG] Current appConfig state before update:`, 'info')
+  log(`[DEBUG] - updateTotalContainers: ${appConfig.updateTotalContainers}`, 'info')
+  log(`[DEBUG] - updateCompletedContainers: ${appConfig.updateCompletedContainers}`, 'info')
 
-  if (typeof options?.updates?.completedContainers !== 'undefined') {
-    appConfig.updateCompletedContainers += options.updates.completedContainers
-  }
+  try {
+    if (typeof options?.updates?.totalContainers !== 'undefined') {
+      const oldValue = appConfig.updateTotalContainers
+      appConfig.updateTotalContainers += options.updates.totalContainers
+      log(
+        `[DEBUG] Updated updateTotalContainers from ${oldValue} to ${appConfig.updateTotalContainers}`,
+        'info',
+      )
+    }
 
-  // Reset counters when complete
-  if (appConfig.updateCompletedContainers === appConfig.updateTotalContainers) {
-    appConfig.updateCompletedContainers = 0
-    appConfig.updateTotalContainers = 0
-  }
+    if (typeof options?.updates?.completedContainers !== 'undefined') {
+      const oldValue = appConfig.updateCompletedContainers
+      appConfig.updateCompletedContainers += options.updates.completedContainers
+      log(
+        `[DEBUG] Updated updateCompletedContainers from ${oldValue} to ${appConfig.updateCompletedContainers}`,
+        'info',
+      )
+    }
 
-  // Handle overflow
-  if (appConfig.updateCompletedContainers > appConfig.updateTotalContainers) {
-    appConfig.updateCompletedContainers = 0
-  }
+    // Reset counters when complete
+    if (appConfig.updateCompletedContainers === appConfig.updateTotalContainers) {
+      log(`[DEBUG] Container download complete, resetting counters`, 'info')
+      appConfig.updateCompletedContainers = 0
+      appConfig.updateTotalContainers = 0
+    }
 
-  // Return success to FileMaker
-  if (typeof fmBridgit !== 'undefined') {
-    fmBridgit.returnResult({ status: 'ok' })
-  }
+    // Handle overflow
+    if (appConfig.updateCompletedContainers > appConfig.updateTotalContainers) {
+      log(`[WARN] Container overflow detected, resetting completed count`, 'warn')
+      appConfig.updateCompletedContainers = 0
+    }
 
-  return Promise.resolve({ success: true, message: 'Container downloads updated' })
+    log(`[DEBUG] Final appConfig state after update:`, 'info')
+    log(`[DEBUG] - updateTotalContainers: ${appConfig.updateTotalContainers}`, 'info')
+    log(`[DEBUG] - updateCompletedContainers: ${appConfig.updateCompletedContainers}`, 'info')
+
+    // Return success to FileMaker
+    if (typeof fmBridgit !== 'undefined') {
+      log(`[DEBUG] fmBridgit available, calling returnResult with status: ok`, 'info')
+      try {
+        const result = await fmBridgit.returnResult({ status: 'ok' })
+        log(
+          `[DEBUG] fmBridgit.returnResult completed successfully: ${JSON.stringify(result)}`,
+          'info',
+        )
+      } catch (error) {
+        log(`[WARN] fmBridgit.returnResult failed: ${error.message}`, 'warn')
+        log(`[WARN] This is expected behavior - FileMaker may reject some acknowledgments`, 'warn')
+        // Continue execution even if FileMaker acknowledgment fails
+      }
+    } else {
+      log(`[WARN] fmBridgit not available for returnResult`, 'warn')
+    }
+
+    const result = { success: true, message: 'Container downloads updated' }
+    log(
+      `[DEBUG] handleUpdatesContainerDownloads returning: ${JSON.stringify(result, null, 2)}`,
+      'info',
+    )
+    return Promise.resolve(result)
+  } catch (error) {
+    log(`[ERROR] Error in handleUpdatesContainerDownloads: ${error.message}`, 'error')
+    log(`[ERROR] Error stack: ${error.stack}`, 'error')
+    const errorResult = { success: false, error: error.message }
+    log(
+      `[DEBUG] handleUpdatesContainerDownloads returning error: ${JSON.stringify(errorResult, null, 2)}`,
+      'info',
+    )
+    return Promise.resolve(errorResult)
+  }
 }
 
 // Handle webSyncReceivePayload action
@@ -351,12 +457,12 @@ async function handleWebSyncReceivePayload(options) {
 
             // Create edit document in Firestore
             const editData = {
-              id: edit.id || `edit_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-              _table: edit.table || 'UnknownTable',
+              ...edit, // include all edit fields coming from FileMaker
+              id: edit.id || null, // keep the table record id in-field
+              _table: edit._table || edit.table || 'UnknownTable',
               _tsModFireStore: new Date(),
-              _ts: {},
+              _ts: edit._ts || {},
               _contexts: appConfig.device.contexts || [],
-              ...edit, // Include all edit fields
             }
 
             log(
@@ -366,15 +472,25 @@ async function handleWebSyncReceivePayload(options) {
 
             // Add to Firestore collection
             try {
-              const { doc, setDoc } = await import('firebase/firestore')
-              const editRef = doc(window.fsOrganizationRef, 'Edits', editData.id)
+              const { doc, setDoc, getDoc, collection } = await import('firebase/firestore')
+              const editsColRef = collection(window.fsDeviceRef, 'Edits')
+              const editRef = doc(editsColRef) // auto-generated Firestore ID
 
               log(
-                `[DEBUG] Creating Firestore document at: Organizations/${appConfig.organization.id}/Edits/${editData.id}`,
+                `[DEBUG] Creating Firestore document at: Organizations/${appConfig.organization.id}/Devices/${appConfig.device.id}/Edits/${editData.id}`,
                 'info',
               )
 
               await setDoc(editRef, editData)
+              try {
+                const snap = await getDoc(editRef)
+                log(
+                  `[DEBUG] Read-back after write → exists: ${snap.exists()}, fromCache: ${snap.metadata?.fromCache}, hasPendingWrites: ${snap.metadata?.hasPendingWrites}`,
+                  'info',
+                )
+              } catch (rbErr) {
+                log(`[WARN] Read-back check failed: ${rbErr?.message || rbErr}`, 'warn')
+              }
               log(
                 `[DEBUG] Successfully created Firestore document for edit: ${editData.id}`,
                 'info',
@@ -403,6 +519,13 @@ async function handleWebSyncReceivePayload(options) {
           // Update edit state
           appConfig.editsCurrentState = '4'
           log(`[DEBUG] Updated edit state to: ${appConfig.editsCurrentState}`, 'info')
+
+          // Stop processing spinner when uploads finish for this payload
+          try {
+            appConfig.endProcessing()
+          } catch {
+            /* no-op */
+          }
 
           // Reset counters when complete
           if (appConfig.editsContainersComplete === appConfig.editsContainersTotal) {
@@ -650,47 +773,86 @@ function processSnapshot(snapshot, appConfig) {
 export function namedAction(actionName, options = {}) {
   const appConfig = useAppConfigStore()
 
-  switch (actionName) {
-    case 'isProcessing':
-      return appConfig.startProcessing()
+  log(`[DEBUG] namedAction called: ${actionName}`, 'info')
+  log(`[DEBUG] namedAction options: ${JSON.stringify(options, null, 2)}`, 'info')
+  log(`[DEBUG] namedAction timestamp: ${new Date().toISOString()}`, 'info')
 
-    case 'endProcessing':
-      return appConfig.endProcessing()
+  let result
 
-    case 'promptUserToConfigure':
-      // Mock user configuration prompt
-      console.log('[namedAction] promptUserToConfigure called')
-      return Promise.resolve({ success: true, message: 'User prompted (mocked)' })
+  try {
+    switch (actionName) {
+      case 'isProcessing':
+        log(`[DEBUG] Starting isProcessing action`, 'info')
+        result = appConfig.startProcessing()
+        log(`[DEBUG] isProcessing result: ${JSON.stringify(result, null, 2)}`, 'info')
+        return result
 
-    case 'getSignedURL':
-      // Mock signed URL generation (used by Uppy in original)
-      console.log('[namedAction] getSignedURL called with options:', options)
-      return Promise.resolve(`https://mock-signed-url.com/${options.name}`)
+      case 'endProcessing':
+        log(`[DEBUG] Starting endProcessing action`, 'info')
+        result = appConfig.endProcessing()
+        log(`[DEBUG] endProcessing result: ${JSON.stringify(result, null, 2)}`, 'info')
+        return result
 
-    case 'FSUpdatesHandler':
-      return handleFSUpdates(options)
+      case 'promptUserToConfigure':
+        log(`[DEBUG] Starting promptUserToConfigure action`, 'info')
+        // Mock user configuration prompt
+        console.log('[namedAction] promptUserToConfigure called')
+        result = Promise.resolve({ success: true, message: 'User prompted (mocked)' })
+        log(`[DEBUG] promptUserToConfigure result: ${JSON.stringify(result, null, 2)}`, 'info')
+        return result
 
-    case 'editsUpdateStatus':
-      return handleEditsUpdateStatus(options)
+      case 'getSignedURL':
+        log(`[DEBUG] Starting getSignedURL action`, 'info')
+        // Mock signed URL generation (used by Uppy in original)
+        console.log('[namedAction] getSignedURL called with options:', options)
+        result = Promise.resolve(`https://mock-signed-url.com/${options.name}`)
+        log(`[DEBUG] getSignedURL result: ${JSON.stringify(result, null, 2)}`, 'info')
+        return result
 
-    case 'updatesContainerDownloads':
-      return handleUpdatesContainerDownloads(options)
+      case 'FSUpdatesHandler':
+        log(`[DEBUG] Starting FSUpdatesHandler action`, 'info')
+        result = handleFSUpdates(options)
+        log(`[DEBUG] FSUpdatesHandler result: ${JSON.stringify(result, null, 2)}`, 'info')
+        return result
 
-    case 'webSyncReceivePayload':
-      return handleWebSyncReceivePayload(options)
+      case 'editsUpdateStatus':
+        log(`[DEBUG] Starting editsUpdateStatus action`, 'info')
+        result = handleEditsUpdateStatus(options)
+        log(`[DEBUG] editsUpdateStatus result: ${JSON.stringify(result, null, 2)}`, 'info')
+        return result
 
-    case 'subscribeUpdates':
-      return handleSubscribeUpdates(options)
+      case 'updatesContainerDownloads':
+        log(`[DEBUG] Starting updatesContainerDownloads action`, 'info')
+        result = handleUpdatesContainerDownloads(options)
+        log(`[DEBUG] updatesContainerDownloads result: ${JSON.stringify(result, null, 2)}`, 'info')
+        return result
 
-    case 'subscribeUpdatesDebounce':
-      // This would typically implement a debounced version of subscribeUpdates
-      // For now, we'll just log it
-      log('subscribeUpdatesDebounce called - would re-subscribe to updates', 'info')
-      return Promise.resolve({ success: true, message: 'Debounced subscription triggered' })
+      case 'webSyncReceivePayload':
+        log(`[DEBUG] Starting webSyncReceivePayload action`, 'info')
+        result = handleWebSyncReceivePayload(options)
+        log(`[DEBUG] webSyncReceivePayload result: ${JSON.stringify(result, null, 2)}`, 'info')
+        return result
 
-    default:
-      console.warn(`[namedAction] Unknown action: ${actionName}`)
-      return Promise.resolve({ success: false, message: `Unknown action: ${actionName}` })
+      case 'subscribeUpdates':
+        log(`[DEBUG] Starting subscribeUpdates action`, 'info')
+        result = handleSubscribeUpdates(options)
+        log(`[DEBUG] subscribeUpdates result: ${JSON.stringify(result, null, 2)}`, 'info')
+        return result
+
+      case 'subscribeUpdatesDebounce':
+        // This would typically implement a debounced version of subscribeUpdates
+        // For now, we'll just log it
+        log('subscribeUpdatesDebounce called - would re-subscribe to updates', 'info')
+        return Promise.resolve({ success: true, message: 'Debounced subscription triggered' })
+
+      default:
+        console.warn(`[namedAction] Unknown action: ${actionName}`)
+        return Promise.resolve({ success: false, message: `Unknown action: ${actionName}` })
+    }
+  } catch (error) {
+    log(`[ERROR] Error in namedAction ${actionName}: ${error.message}`, 'error')
+    log(`[ERROR] Error stack: ${error.stack}`, 'error')
+    return Promise.resolve({ success: false, error: error.message })
   }
 }
 
@@ -775,18 +937,27 @@ export function log(message, level = 'info') {
 // Create a BF-like global object for compatibility
 // namedActionFM - FileMaker-specific named action handler
 // This is called by FileMaker scripts and expects a JSON string parameter
-export function namedActionFM(jsonString) {
+// Always return a JSON string so FileMaker reliably receives text
+export async function namedActionFM(jsonString) {
   try {
     const params = JSON.parse(jsonString)
     const { name, options = {} } = params
 
     log(`namedActionFM called: ${name}`, 'info')
 
-    // Call the regular namedAction with parsed parameters
-    return namedAction(name, options)
+    // Call the regular namedAction with parsed parameters and normalize to string
+    const result = await Promise.resolve(namedAction(name, options))
+    try {
+      return JSON.stringify(result)
+    } catch (stringifyError) {
+      return JSON.stringify({
+        success: false,
+        error: `stringify_failed: ${String(stringifyError?.message || stringifyError)}`,
+      })
+    }
   } catch (error) {
     log(`Error in namedActionFM: ${error.message}`, 'error')
-    return Promise.resolve({ success: false, error: error.message })
+    return JSON.stringify({ success: false, error: String(error?.message || error) })
   }
 }
 

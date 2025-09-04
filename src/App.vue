@@ -1,14 +1,37 @@
 <script setup>
 import { useAppConfigStore } from './stores/appConfig'
-import { initializeFirebaseServices } from './firebaseInit'
+import { initializeFirebaseServices, goFirestoreOffline, goFirestoreOnline } from './firebaseInit'
 import { fmBridgit } from './fileMakerBridge'
 import './utils/betterFormsUtils' // Initialize BF utilities globally
-import { onMounted, ref, computed } from 'vue'
+import { onMounted, ref, computed, watch, onUnmounted } from 'vue'
 
 const appConfig = useAppConfigStore()
 const firebaseStatus = ref('Initializing...')
 const showDebugControls = ref(false)
 const isOnline = ref(navigator.onLine)
+const isFirestoreOffline = ref(false)
+let fmStatusIntervalId = null
+
+// Debounce: only show "System Up to Date" after 1s of inactivity
+const showUpdatesIdleState = ref(true)
+let updatesIdleTimer = null
+const updatesActivity = computed(() => {
+  return appConfig.updatesTotal > 0 || appConfig.updateTotalContainers > 0
+})
+watch(
+  updatesActivity,
+  (isActive) => {
+    if (updatesIdleTimer) clearTimeout(updatesIdleTimer)
+    if (isActive) {
+      showUpdatesIdleState.value = false
+    } else {
+      updatesIdleTimer = setTimeout(() => {
+        showUpdatesIdleState.value = true
+      }, 1000)
+    }
+  },
+  { immediate: true }
+)
 
 // Computed properties for progress calculations
 const editsProgress = computed(() => {
@@ -28,7 +51,7 @@ const updatesContainersProgress = computed(() => {
 
 // Status computed properties
 const connectionStatus = computed(() => {
-  if (!isOnline.value) return 'offline'
+  if (!isOnline.value || isFirestoreOffline.value) return 'offline'
   if (firebaseStatus.value.includes('successfully')) return 'connected'
   if (firebaseStatus.value.includes('error')) return 'error'
   return 'connecting'
@@ -66,7 +89,84 @@ onMounted(async () => {
     isOnline.value = false
     console.log('Network: Offline')
   })
+
+  // Apply persisted Firestore offline preference
+  try {
+    const persisted = localStorage.getItem('ws-firestore-offline')
+    if (persisted === '1') {
+      await goFirestoreOffline()
+      isFirestoreOffline.value = true
+      console.log('Persisted Firestore offline mode applied.')
+    }
+  } catch (e) {
+    console.warn('Could not apply persisted Firestore offline mode', e)
+  }
+
+  // Start periodic FileMaker status polling for pending edits
+  try {
+    const pollMs = appConfig.fmStatusPollingMs || 15000
+    const scriptName = appConfig.fmStatusScriptName || 'API - Web Sync Status'
+    const doPoll = async () => {
+      try {
+        const res = await fmBridgit.performScript(
+          scriptName,
+          JSON.stringify({ action: 'status', what: 'pendingEdits' }),
+        )
+        let pending = 0
+        if (typeof res === 'number') pending = res
+        else if (typeof res === 'string') {
+          try {
+            const obj = JSON.parse(res)
+            pending = Number(obj?.pendingEdits ?? obj?.count ?? 0)
+          } catch {
+            const asInt = parseInt(res, 10)
+            if (!isNaN(asInt)) pending = asInt
+          }
+        } else if (typeof res === 'object' && res) {
+          pending = Number(res.pendingEdits ?? res.count ?? 0)
+        }
+        if (!Number.isFinite(pending) || pending < 0) pending = 0
+        appConfig.fmPendingEdits = pending
+        appConfig.lastFmStatusAt = new Date().toISOString()
+      } catch {
+        /* Non-fatal; ignore and retain previous value */
+      }
+    }
+    // initial and interval
+    doPoll()
+    fmStatusIntervalId = setInterval(doPoll, pollMs)
+  } catch {
+    /* no-op */
+  }
 })
+
+onUnmounted(() => {
+  if (fmStatusIntervalId) {
+    clearInterval(fmStatusIntervalId)
+    fmStatusIntervalId = null
+  }
+})
+
+// Firestore network controls for debug modal
+const setFirestoreOffline = async () => {
+  try {
+    await goFirestoreOffline()
+    isFirestoreOffline.value = true
+    localStorage.setItem('ws-firestore-offline', '1')
+  } catch (e) {
+    console.error('Failed to disable Firestore network', e)
+  }
+}
+
+const setFirestoreOnline = async () => {
+  try {
+    await goFirestoreOnline()
+    isFirestoreOffline.value = false
+    localStorage.setItem('ws-firestore-offline', '0')
+  } catch (e) {
+    console.error('Failed to enable Firestore network', e)
+  }
+}
 
 // Quick Actions — placeholder handlers that will later run FileMaker scripts
 const openWebSyncConfig = async () => {
@@ -320,7 +420,7 @@ const simulateFirestoreUpdate = async () => {
             </div>
 
             <!-- System Status -->
-            <div class="flex items-center space-x-3">
+            <div v-if="systemStatus !== 'idle'" class="flex items-center space-x-3">
               <div :class="{
                 'bg-blue-500': systemStatus === 'processing',
                 'bg-purple-500': systemStatus === 'syncing',
@@ -395,10 +495,44 @@ const simulateFirestoreUpdate = async () => {
 
       <!-- SYNC OPERATIONS SECTION -->
       <div class="px-0 py-4">
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 px-3 sm:px-4 max-w-screen-2xl mx-auto">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 px-3 sm:px-4 max-w-screen-2xl mx-auto">
+
+          <!-- COMBINED DEVICE + ORG CARD (compact) -->
+          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4 min-w-0 lg:col-span-2">
+            <div class="flex items-center justify-between mb-3">
+              <div class="flex items-center space-x-2">
+                <div class="p-2 bg-indigo-600 bg-opacity-20 rounded-lg">
+                  <svg class="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                      d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
+                </div>
+                <h2 class="text-sm font-semibold text-white">Device & Org</h2>
+              </div>
+            </div>
+            <div class="space-y-2 text-xs">
+              <div class="flex items-center justify-between">
+                <span class="text-gray-400">Device:</span>
+                <span class="text-white font-mono">{{ appConfig.device.id }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-gray-400">Mode:</span>
+                <span class="px-2 py-0.5 bg-gray-700 rounded text-[10px] text-white font-medium">{{
+                  appConfig.device.deviceMode }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-gray-400">Org:</span>
+                <span class="text-white font-mono">{{ appConfig.organization.id }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-gray-400">Contexts:</span>
+                <span class="text-white">{{ appConfig.device.contexts.length }}</span>
+              </div>
+            </div>
+          </div>
 
           <!-- EDITS PANEL -->
-          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4 min-w-0">
+          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4 min-w-0 lg:col-span-5">
             <div class="flex items-center justify-between mb-4">
               <div class="flex items-center space-x-3">
                 <div class="p-2 bg-blue-600 bg-opacity-20 rounded-lg">
@@ -408,36 +542,69 @@ const simulateFirestoreUpdate = async () => {
                   </svg>
                 </div>
                 <div>
-                  <h2 class="text-lg font-bold text-white">Data Uploads</h2>
+                  <div class="flex items-center gap-2">
+                    <h2 class="text-lg font-bold text-white">Data Uploads</h2>
+                    <span
+                      class="px-2 py-1 bg-blue-600 bg-opacity-20 rounded-full text-xs font-semibold text-blue-400 uppercase tracking-wide">EDITS</span>
+                  </div>
                   <p class="text-xs text-gray-400">Local to Cloud Sync</p>
                 </div>
-              </div>
-              <div class="px-2 py-1 bg-blue-600 bg-opacity-20 rounded-full">
-                <span class="text-xs font-semibold text-blue-400 uppercase tracking-wide">EDITS</span>
               </div>
             </div>
 
             <div class="mb-3">
               <p class="text-sm text-gray-300">
-                {{ !appConfig.editsTotalPending ? appConfig.editsStates[appConfig.editsCurrentState] :
-                  appConfig.editsStates[appConfig.editsCurrentState] + ": " + appConfig.editsTotalPending }}
+                {{ appConfig.editsTotal ? 'Uploading Edits' : appConfig.editsStates[appConfig.editsCurrentState] }}
               </p>
             </div>
 
-            <!-- Uploading Progress -->
-            <div v-if="appConfig.editsContainersTotal" class="space-y-3">
-              <div class="flex justify-between items-center">
-                <span class="text-gray-300 text-sm">Container Upload Progress</span>
-                <span class="text-blue-400 font-bold text-sm">{{ editsProgress }}%</span>
+            <!-- Status snapshot: pending in FM and local pending writes -->
+            <div class="grid grid-cols-2 gap-4 text-xs mb-2">
+              <div class="flex items-center justify-between text-gray-400">
+                <span>FM pending edits</span>
+                <span class="text-white font-medium">{{ appConfig.fmPendingEdits }}</span>
               </div>
-              <div class="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
-                <div
-                  class="bg-gradient-to-r from-blue-500 to-blue-400 h-1.5 rounded-full transition-all duration-700 ease-out"
-                  :style="`width: ${Math.min(editsProgress, 100)}%`"></div>
+              <div class="flex items-center justify-between text-gray-400">
+                <span>Local unsynced</span>
+                <span class="text-white font-medium">{{ appConfig.editsLocalPendingWrites }}</span>
               </div>
-              <div class="flex justify-between text-xs text-gray-400">
-                <span>{{ appConfig.editsContainersComplete }} completed</span>
-                <span>{{ appConfig.editsContainersTotal }} total</span>
+            </div>
+
+            <div v-if="appConfig.editsTotal || appConfig.editsContainersTotal" class="space-y-4">
+              <!-- Uploading Progress (Edits Records) -->
+              <div v-if="appConfig.editsTotal" class="space-y-3">
+                <div class="flex justify-between items-center">
+                  <span class="text-gray-300 text-sm">Edits Upload Progress</span>
+                  <span class="text-blue-400 font-bold text-sm">{{ Math.round((appConfig.editsTotalCompleted /
+                    appConfig.editsTotal) * 100) }}%</span>
+                </div>
+                <div class="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    class="bg-gradient-to-r from-blue-500 to-blue-400 h-1.5 rounded-full transition-all duration-700 ease-out"
+                    :style="`width: ${Math.min(Math.round((appConfig.editsTotalCompleted / appConfig.editsTotal) * 100), 100)}%`">
+                  </div>
+                </div>
+                <div class="flex justify-between text-xs text-gray-400">
+                  <span>{{ appConfig.editsTotalCompleted }} completed</span>
+                  <span>{{ appConfig.editsTotal }} total</span>
+                </div>
+              </div>
+
+              <!-- Uploading Progress (Containers) -->
+              <div v-if="appConfig.editsContainersTotal" class="border-t border-gray-700 pt-3 space-y-3">
+                <div class="flex justify-between items-center">
+                  <span class="text-gray-300 text-sm">Container Upload Progress</span>
+                  <span class="text-blue-400 font-bold text-sm">{{ editsProgress }}%</span>
+                </div>
+                <div class="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    class="bg-gradient-to-r from-blue-500 to-blue-400 h-1.5 rounded-full transition-all duration-700 ease-out"
+                    :style="`width: ${Math.min(editsProgress, 100)}%`"></div>
+                </div>
+                <div class="flex justify-between text-xs text-gray-400">
+                  <span>{{ appConfig.editsContainersComplete }} completed</span>
+                  <span>{{ appConfig.editsContainersTotal }} total</span>
+                </div>
               </div>
             </div>
 
@@ -452,7 +619,7 @@ const simulateFirestoreUpdate = async () => {
           </div>
 
           <!-- UPDATES PANEL -->
-          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4 min-w-0">
+          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4 min-w-0 lg:col-span-5">
             <div class="flex items-center justify-between mb-4">
               <div class="flex items-center space-x-3">
                 <div class="p-2 bg-green-600 bg-opacity-20 rounded-lg">
@@ -463,12 +630,13 @@ const simulateFirestoreUpdate = async () => {
                   </svg>
                 </div>
                 <div>
-                  <h2 class="text-lg font-bold text-white">Data Downloads</h2>
+                  <div class="flex items-center gap-2">
+                    <h2 class="text-lg font-bold text-white">Data Downloads</h2>
+                    <span
+                      class="px-2 py-1 bg-green-600 bg-opacity-20 rounded-full text-xs font-semibold text-green-400 uppercase tracking-wide">UPDATES</span>
+                  </div>
                   <p class="text-xs text-gray-400">Cloud to Local Sync</p>
                 </div>
-              </div>
-              <div class="px-2 py-1 bg-green-600 bg-opacity-20 rounded-full">
-                <span class="text-xs font-semibold text-green-400 uppercase tracking-wide">UPDATES</span>
               </div>
             </div>
 
@@ -515,7 +683,7 @@ const simulateFirestoreUpdate = async () => {
               </div>
             </div>
 
-            <div v-else class="text-center py-4">
+            <div v-else-if="showUpdatesIdleState" class="text-center py-4">
               <svg class="w-8 h-8 mx-auto mb-2 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                   d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
@@ -523,106 +691,15 @@ const simulateFirestoreUpdate = async () => {
               <p class="text-green-400 font-semibold text-sm">System Up to Date</p>
               <p class="text-xs text-gray-400">All data synchronized</p>
             </div>
+            <div v-else class="text-center py-4 text-gray-500">
+              <p class="text-xs invisible">placeholder</p>
+            </div>
           </div>
 
         </div>
       </div>
 
-      <!-- SYSTEM OVERVIEW CARDS -->
-      <div class="px-0 py-2">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 px-3 sm:px-4 max-w-screen-2xl mx-auto">
-          <!-- Device Info Card -->
-          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4">
-            <div class="flex items-center justify-between mb-4">
-              <h3 class="text-lg font-semibold text-white">Device Info</h3>
-              <div class="p-2 bg-blue-600 bg-opacity-20 rounded-lg">
-                <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                    d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z">
-                  </path>
-                </svg>
-              </div>
-            </div>
-            <div class="space-y-3">
-              <div class="flex justify-between items-center">
-                <span class="text-gray-400 text-xs">ID:</span>
-                <span class="text-white font-mono text-sm">{{ appConfig.device.id }}</span>
-              </div>
-              <div class="flex justify-between items-center">
-                <span class="text-gray-400 text-xs">Mode:</span>
-                <span class="px-2 py-1 bg-gray-700 rounded text-xs text-white font-medium">{{
-                  appConfig.device.deviceMode }}</span>
-              </div>
-              <div class="flex justify-between items-center">
-                <span class="text-gray-400 text-xs">Type:</span>
-                <span class="text-white text-sm">{{ appConfig.device.deviceType }}</span>
-              </div>
-            </div>
-          </div>
 
-          <!-- Organization Card -->
-          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4">
-            <div class="flex items-center justify-between mb-4">
-              <h3 class="text-lg font-semibold text-white">Organization</h3>
-              <div class="p-2 bg-green-600 bg-opacity-20 rounded-lg">
-                <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                    d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4">
-                  </path>
-                </svg>
-              </div>
-            </div>
-            <div class="space-y-3">
-              <div class="flex justify-between items-center">
-                <span class="text-gray-400 text-xs">ID:</span>
-                <span class="text-white font-mono text-sm">{{ appConfig.organization.id }}</span>
-              </div>
-              <div class="flex justify-between items-center">
-                <span class="text-gray-400 text-xs">Contexts:</span>
-                <span class="text-white text-sm">{{ appConfig.device.contexts.length }}</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- System Status Card -->
-          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4">
-            <div class="flex items-center justify-between mb-4">
-              <h3 class="text-lg font-semibold text-white">System Status</h3>
-              <div class="p-2 bg-purple-600 bg-opacity-20 rounded-lg">
-                <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                    d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2h-2a2 2 0 00-2-2z">
-                  </path>
-                </svg>
-              </div>
-            </div>
-            <div class="space-y-3">
-              <div class="flex items-center justify-between">
-                <span class="text-gray-400 text-xs">Database:</span>
-                <div class="flex items-center space-x-2">
-                  <div :class="{
-                    'bg-green-500': connectionStatus === 'connected',
-                    'bg-red-500': connectionStatus === 'error' || connectionStatus === 'offline',
-                    'bg-yellow-500': connectionStatus === 'connecting'
-                  }" class="w-2 h-2 rounded-full"></div>
-                  <span class="text-white text-xs font-medium">{{
-                    connectionStatus === 'connected' ? 'Online' :
-                      connectionStatus === 'offline' ? 'Offline' :
-                        connectionStatus === 'error' ? 'Error' :
-                          'Connecting'
-                  }}</span>
-                </div>
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-gray-400 text-xs">Processing:</span>
-                <span :class="appConfig.isProcessing ? 'text-yellow-400' : 'text-gray-400'" class="text-xs font-medium">
-                  {{ appConfig.isProcessing ? 'Active' : 'Idle' }}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
 
     </div>
 
@@ -640,23 +717,25 @@ const simulateFirestoreUpdate = async () => {
           </button>
         </div>
 
-        <!-- Processing Controls -->
+
+
+        <!-- Firestore Network Controls -->
         <div class="mb-8">
-          <h4 class="text-sm font-semibold text-white mb-4">Processing State</h4>
+          <h4 class="text-sm font-semibold text-white mb-4">Firestore Network</h4>
           <div class="flex items-center justify-between mb-4">
-            <span class="text-gray-400">Status:</span>
-            <span :class="appConfig.isProcessing ? 'text-yellow-400' : 'text-green-400'" class="font-semibold">
-              {{ appConfig.isProcessing ? 'Active' : 'Idle' }}
+            <span class="text-gray-400">Mode:</span>
+            <span :class="isFirestoreOffline ? 'text-red-400' : 'text-green-400'" class="font-semibold">
+              {{ isFirestoreOffline ? 'Offline (network disabled)' : 'Online' }}
             </span>
           </div>
           <div class="grid grid-cols-2 gap-4">
-            <button @click="appConfig.startProcessing()"
-              class="bg-blue-600 hover:bg-blue-700 text-white py-3 px-4 rounded-xl font-medium transition-colors">
-              Start
+            <button @click="setFirestoreOffline"
+              class="bg-red-600 hover:bg-red-700 text-white py-3 px-4 rounded-xl font-medium transition-colors">
+              Go Offline
             </button>
-            <button @click="appConfig.endProcessing()"
-              class="bg-gray-600 hover:bg-gray-700 text-white py-3 px-4 rounded-xl font-medium transition-colors">
-              Stop
+            <button @click="setFirestoreOnline"
+              class="bg-green-600 hover:bg-green-700 text-white py-3 px-4 rounded-xl font-medium transition-colors">
+              Go Online
             </button>
           </div>
         </div>
@@ -667,6 +746,16 @@ const simulateFirestoreUpdate = async () => {
           <div class="space-y-4">
             <div class="flex items-center justify-between">
               <label class="text-gray-400 text-sm">Edits:</label>
+              <div class="flex items-center space-x-2">
+                <input v-model.number="appConfig.editsTotalCompleted" type="number"
+                  class="w-20 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm" min="0" />
+                <span class="text-gray-500">/</span>
+                <input v-model.number="appConfig.editsTotal" type="number"
+                  class="w-20 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm" min="0" />
+              </div>
+            </div>
+            <div class="flex items-center justify-between">
+              <label class="text-gray-400 text-sm">Upload Containers:</label>
               <div class="flex items-center space-x-2">
                 <input v-model.number="appConfig.editsContainersComplete" type="number"
                   class="w-20 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm" min="0" />
@@ -729,15 +818,7 @@ const simulateFirestoreUpdate = async () => {
           </div>
         </div>
 
-        <!-- System Info -->
-        <div class="border-t border-gray-700 pt-6">
-          <h4 class="text-sm font-semibold text-white mb-3">System Info</h4>
-          <div class="space-y-2 text-xs text-gray-400 font-mono">
-            <div>ORG: {{ appConfig.organization.id }}</div>
-            <div>DEV: {{ appConfig.device.id }} ({{ appConfig.device.deviceMode }})</div>
-            <div>DB: {{ firebaseStatus }}</div>
-          </div>
-        </div>
+
       </div>
     </div>
 

@@ -31,7 +31,15 @@ export const useAppConfigStore = defineStore('appConfig', {
     },
     editsContainersComplete: 0,
     editsContainersTotal: 0,
+    editsTotalCompleted: 0,
+    editsTotal: 0,
     editsCurrentState: '0',
+    // New: visibility/telemetry for pending edits
+    fmPendingEdits: 0, // Count of edits in FileMaker not yet pushed to Web App
+    editsLocalPendingWrites: 0, // Count of local Firestore writes not yet synced to cloud
+    lastFmStatusAt: null, // Timestamp of last status poll
+    fmStatusScriptName: 'API - Web Sync Status', // Can be overridden if needed
+    fmStatusPollingMs: 15000, // Polling cadence for FM status
     editsStates: {
       0: 'No New Edits',
       1: 'Starting Sync',

@@ -1,10 +1,13 @@
 import { initializeApp } from 'firebase/app'
 import {
-  getFirestore,
-  enableIndexedDbPersistence,
+  initializeFirestore,
+  persistentLocalCache,
+  enableNetwork,
+  disableNetwork,
   doc,
   collection,
   setDoc,
+  onSnapshot,
 } from 'firebase/firestore'
 import { firebaseConfig } from './firebaseConfig' // Your Firebase project credentials
 import { useAppConfigStore } from './stores/appConfig'
@@ -19,6 +22,8 @@ let fsUpdatesRefUnsubscribe = null
 let fsOrganizationDocRef = null
 let fsDeviceDocRef = null
 let fsUpdatesCollectionRef = null
+let fsEditsCollectionRef = null
+let fsEditsRefUnsubscribe = null
 
 async function checkParentDocuments() {
   const appConfig = useAppConfigStore()
@@ -65,20 +70,23 @@ export async function initializeFirebaseServices() {
   try {
     console.log('Initializing Firebase app...')
     firebaseApp = initializeApp(firebaseConfig)
-    db = getFirestore(firebaseApp)
+    db = initializeFirestore(firebaseApp, {
+      localCache: persistentLocalCache(),
+    })
     try {
       console.log('Using Firebase project:', firebaseApp?.options?.projectId)
-    } catch {}
+    } catch {
+      /* no-op */
+    }
 
-    console.log('Enabling Firestore offline persistence...')
-    await enableIndexedDbPersistence(db)
-    console.log('Firestore offline persistence enabled.')
+    console.log('Configured Firestore persistent local cache.')
 
     // Initialize document/collection references after db is initialized and config is available
     if (appConfig.organization.id && appConfig.device.id) {
       fsOrganizationDocRef = doc(db, 'Organizations', appConfig.organization.id)
       fsDeviceDocRef = doc(fsOrganizationDocRef, 'Devices', appConfig.device.id) // Uses fsOrganizationDocRef
       fsUpdatesCollectionRef = collection(fsOrganizationDocRef, 'Updates') // Uses fsOrganizationDocRef
+      fsEditsCollectionRef = collection(fsDeviceDocRef, 'Edits')
       console.log('Firestore document/collection references initialized.')
     } else {
       console.error(
@@ -95,6 +103,24 @@ export async function initializeFirebaseServices() {
   }
 }
 
+// Accessor for Firestore db instance (read-only usage outside this module)
+export function getFirestoreDb() {
+  return db
+}
+
+// Helpers to toggle Firestore network for debugging/offline simulations
+export async function goFirestoreOffline() {
+  if (!db) return
+  await disableNetwork(db)
+  console.log('Firestore network disabled (offline mode).')
+}
+
+export async function goFirestoreOnline() {
+  if (!db) return
+  await enableNetwork(db)
+  console.log('Firestore network enabled (online mode).')
+}
+
 async function setupFirestoreListenersAndChecks() {
   console.log('Setting up Firestore listeners and initial checks...')
   await checkParentDocuments() // Call the new function
@@ -105,6 +131,8 @@ async function setupFirestoreListenersAndChecks() {
     window.fsDeviceRef = fsDeviceDocRef
     window.fsUpdatesRef = fsUpdatesCollectionRef
     window.fsUpdatesRefUnsubscribe = fsUpdatesRefUnsubscribe
+    window.fsEditsRef = fsEditsCollectionRef
+    window.fsEditsRefUnsubscribe = fsEditsRefUnsubscribe
     console.log('Firestore references exposed globally for BetterForms compatibility')
   }
 
@@ -115,6 +143,34 @@ async function setupFirestoreListenersAndChecks() {
     console.log('subscribeUpdates result:', result)
   } catch (error) {
     console.error('Error setting up updates subscription:', error)
+  }
+
+  // Listener to track local pending writes for Edits
+  try {
+    const appConfig = useAppConfigStore()
+    if (fsEditsRefUnsubscribe) {
+      fsEditsRefUnsubscribe()
+    }
+    if (fsEditsCollectionRef) {
+      fsEditsRefUnsubscribe = onSnapshot(
+        fsEditsCollectionRef,
+        { includeMetadataChanges: true },
+        (snapshot) => {
+          let pending = 0
+          snapshot.docs.forEach((docSnap) => {
+            if (docSnap.metadata && docSnap.metadata.hasPendingWrites) pending += 1
+          })
+          appConfig.editsLocalPendingWrites = pending
+        },
+        (error) => {
+          console.warn('Edits pending-writes listener error:', error?.message || error)
+        },
+      )
+      window.fsEditsRefUnsubscribe = fsEditsRefUnsubscribe
+      console.log('Edits pending-writes listener established')
+    }
+  } catch (e) {
+    console.warn('Failed to establish Edits pending-writes listener', e)
   }
 
   console.log('Firestore listeners and checks setup complete.')

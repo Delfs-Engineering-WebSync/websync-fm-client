@@ -1,9 +1,14 @@
 ;(function setupFileMakerConsoleBridge() {
-  const globalScope = typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : undefined)
+  const globalScope =
+    typeof window !== 'undefined'
+      ? window
+      : typeof globalThis !== 'undefined'
+        ? globalThis
+        : undefined
   if (!globalScope) return
-  if (globalScope.__fileMakerConsoleBridgeApplied) return
 
-  const originalLog = console.log.bind(console)
+  let applied = !!globalScope.__fileMakerConsoleBridgeApplied
+  const originalLog = console.log.__fileMakerOriginal || console.log.bind(console)
 
   function serializeArgs(args) {
     try {
@@ -24,7 +29,7 @@
             } catch {
               return Object.prototype.toString.call(value)
             }
-          })
+          }),
         )
       } catch {
         try {
@@ -36,25 +41,55 @@
     }
   }
 
-  console.log = function fileMakerMirroredConsoleLog(...args) {
-    originalLog(...args)
-    try {
-      if (globalScope.FileMaker && typeof globalScope.FileMaker.PerformScript === 'function') {
-        const payload = serializeArgs(args)
-        globalScope.FileMaker.PerformScript('DebugLog', payload)
-      }
-    } catch (bridgeError) {
+  function applyBridge() {
+    if (applied) return
+    const patched = function fileMakerMirroredConsoleLog(...args) {
+      originalLog(...args)
       try {
-        originalLog('[FileMaker Console Bridge] Error sending to FileMaker:', bridgeError)
-      } catch {
-        // no-op
+        if (globalScope.FileMaker && typeof globalScope.FileMaker.PerformScript === 'function') {
+          const payload = serializeArgs(args)
+          globalScope.FileMaker.PerformScript('DebugLog', payload)
+        }
+      } catch (bridgeError) {
+        try {
+          originalLog('[FileMaker Console Bridge] Error sending to FileMaker:', bridgeError)
+        } catch {
+          // no-op
+        }
       }
     }
+    patched.__fileMakerOriginal = originalLog
+    console.log = patched
+    applied = true
+    globalScope.__fileMakerConsoleBridgeApplied = true
   }
 
-  // Expose a reference to the original method for debugging and idempotency
-  console.log.__fileMakerOriginal = originalLog
-  globalScope.__fileMakerConsoleBridgeApplied = true
+  function removeBridge() {
+    if (!applied) return
+    try {
+      const orig = console.log.__fileMakerOriginal || originalLog
+      console.log = orig
+    } catch { /* noop */ void 0 }
+    applied = false
+    globalScope.__fileMakerConsoleBridgeApplied = false
+  }
+
+  globalScope.enableFileMakerConsoleBridge = function enableFileMakerConsoleBridge() {
+    applyBridge()
+  }
+  globalScope.disableFileMakerConsoleBridge = function disableFileMakerConsoleBridge() {
+    removeBridge()
+  }
+
+  let shouldEnable = false
+  try {
+    shouldEnable =
+      !!globalScope.__fileMakerConsoleBridgeEnabled ||
+      (globalScope.localStorage && globalScope.localStorage.getItem('fmLog') === '1') ||
+      (globalScope.location && new URL(globalScope.location.href).searchParams.get('fmLog') === '1')
+  } catch { /* noop */ void 0 }
+
+  if (shouldEnable) {
+    applyBridge()
+  }
 })()
-
-

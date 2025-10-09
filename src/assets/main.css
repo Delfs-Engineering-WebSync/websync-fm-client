@@ -3,6 +3,9 @@
 /* Prevent horizontal scrolling and bounce scrolling */
 html,
 body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
   overflow-x: auto;
   width: 100%;
   max-width: 100%;

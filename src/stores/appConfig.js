@@ -15,6 +15,7 @@ export const useAppConfigStore = defineStore('appConfig', {
       idDevice: null, // Will be set by URL param or defaulted to DEV_demo
       idOrganization: null, // Will be set by URL param or defaulted to ORG_demo
       tsModFireStoreLastUpdate: new Date().toISOString(), // Initialize with current date as a sensible default
+      autoPullEdits: false,
     },
     device: {
       // This will be populated further, including by URL params via initializeConfig
@@ -75,6 +76,18 @@ export const useAppConfigStore = defineStore('appConfig', {
     updatesTotal: 0,
     updatesTotalCompleted: 0,
     updatesTotalRecords: 0,
+
+    // Upload session snapshot (fixed target for monotonic progress)
+    sessionUpload: {
+      active: false,
+      total: 0, // fixed total captured at session start
+      baselineCompleted: 0, // editsTotalCompleted at session start
+      startedAt: null,
+      // Last session snapshot for post-run display
+      lastTotal: 0,
+      lastCompleted: 0,
+      endedAt: null,
+    },
   }),
   actions: {
     initializeConfigFromURLParams() {
@@ -108,6 +121,32 @@ export const useAppConfigStore = defineStore('appConfig', {
         this.configx.tsModFireStoreLastUpdate = now.toISOString()
       }
 
+      // Load persisted auto flags
+      try {
+        const persistedPull = window.localStorage.getItem('ws-auto-pull-edits')
+        const persistedLegacyPull = window.localStorage.getItem('ws-auto-pull-fm-edits')
+        const persistedLegacyPush = window.localStorage.getItem('ws-auto-push-edits')
+        if (persistedPull !== null) this.configx.autoPullEdits = persistedPull === '1'
+        else if (persistedLegacyPull !== null)
+          this.configx.autoPullEdits = persistedLegacyPull === '1'
+        else if (persistedLegacyPush !== null)
+          this.configx.autoPullEdits = persistedLegacyPush === '1'
+      } catch {}
+
+      // URL param override (supports new and legacy)
+      const pullParam = getQueryParam('autoPullEdits')
+      const legacyPullParam = getQueryParam('autoPullFmEdits')
+      const legacyPushParam = getQueryParam('autoPushEdits')
+      const chosen = pullParam ?? legacyPullParam ?? legacyPushParam
+      if (chosen !== null) {
+        const normalized = String(chosen).toLowerCase()
+        const value = normalized === '1' || normalized === 'true' || normalized === 'yes'
+        this.configx.autoPullEdits = value
+        try {
+          window.localStorage.setItem('ws-auto-pull-edits', value ? '1' : '0')
+        } catch {}
+      }
+
       const contextsFromQuery = getQueryParam('contexts')
       if (contextsFromQuery) {
         try {
@@ -134,6 +173,49 @@ export const useAppConfigStore = defineStore('appConfig', {
     endProcessing() {
       this.isProcessing = false
       console.log('isProcessing set to false')
+    },
+    setAutoPullEdits(value) {
+      const v = !!value
+      this.configx.autoPullEdits = v
+      try {
+        window.localStorage.setItem('ws-auto-pull-edits', v ? '1' : '0')
+      } catch {}
+    },
+    // Back-compat aliases
+    setAutoPullFmEdits(value) {
+      this.setAutoPullEdits(value)
+    },
+    setAutoPushEdits(value) {
+      this.setAutoPullEdits(value)
+    },
+    // Upload session helpers
+    beginUploadSession(currentTotal = 0, currentCompleted = 0) {
+      this.sessionUpload.active = true
+      this.sessionUpload.total = Number.isFinite(currentTotal) ? currentTotal : 0
+      this.sessionUpload.baselineCompleted = Number.isFinite(currentCompleted)
+        ? currentCompleted
+        : 0
+      this.sessionUpload.startedAt = new Date().toISOString()
+      // Clear previous last-session snapshot when starting new run
+      this.sessionUpload.lastTotal = 0
+      this.sessionUpload.lastCompleted = 0
+      this.sessionUpload.endedAt = null
+    },
+    endUploadSession() {
+      // Capture last session snapshot before clearing
+      const completedDelta = Math.max(
+        0,
+        (this.editsTotalCompleted || 0) - (this.sessionUpload.baselineCompleted || 0),
+      )
+      this.sessionUpload.lastTotal = this.sessionUpload.total || 0
+      this.sessionUpload.lastCompleted = Math.min(this.sessionUpload.lastTotal, completedDelta)
+      this.sessionUpload.endedAt = new Date().toISOString()
+
+      // Clear active session
+      this.sessionUpload.active = false
+      this.sessionUpload.total = 0
+      this.sessionUpload.baselineCompleted = 0
+      this.sessionUpload.startedAt = null
     },
     // We will add more actions here as we translate other parts of your initFirestore script
   },

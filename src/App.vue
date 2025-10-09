@@ -49,6 +49,41 @@ const updatesContainersProgress = computed(() => {
   return Math.round((appConfig.updateCompletedContainers / appConfig.updateTotalContainers) * 100)
 })
 
+// Session-based upload progress (monotonic within a run)
+const sessionUploadTotal = computed(() => {
+  return appConfig.sessionUpload?.active && appConfig.sessionUpload.total > 0
+    ? appConfig.sessionUpload.total
+    : appConfig.editsTotal
+})
+
+const sessionUploadCompleted = computed(() => {
+  if (appConfig.sessionUpload?.active) {
+    const delta = appConfig.editsTotalCompleted - (appConfig.sessionUpload.baselineCompleted || 0)
+    return Math.max(0, delta)
+  }
+  return appConfig.editsTotalCompleted
+})
+
+const sessionUploadPercent = computed(() => {
+  const total = sessionUploadTotal.value
+  if (!total) return 0
+  return Math.round((sessionUploadCompleted.value / total) * 100)
+})
+
+// Last session display values when no active session
+const lastSessionCompleted = computed(() => appConfig.sessionUpload?.lastCompleted || 0)
+const lastSessionTotal = computed(() => appConfig.sessionUpload?.lastTotal || 0)
+
+// Unified display values for the KPI so it never disappears
+const uploadedKpiCompleted = computed(() => {
+  return sessionUploadTotal.value ? sessionUploadCompleted.value : lastSessionCompleted.value
+})
+const uploadedKpiTotal = computed(() => {
+  return sessionUploadTotal.value ? sessionUploadTotal.value : lastSessionTotal.value
+})
+
+// Session lifecycle is started explicitly by user actions; no auto-start tied to settings
+
 // Status computed properties
 const connectionStatus = computed(() => {
   if (!isOnline.value || isFirestoreOffline.value) return 'offline'
@@ -62,6 +97,20 @@ const systemStatus = computed(() => {
   if (appConfig.updatesTotal > 0 || appConfig.editsContainersTotal > 0) return 'syncing'
   return 'idle'
 })
+
+// Auto-pull FM edits when enabled and pending exist (runs regardless of online/offline)
+const tryAutoPullEdits = async (why = 'watcher') => {
+  try {
+    if (!appConfig.configx.autoPullEdits) return
+    if (!(appConfig.fmPendingEdits > 0)) return
+    // Trigger FM to start sync; FM should push payload via web viewer callback to webSyncReceivePayload
+    fmBridgit.performScript('Start Sync', JSON.stringify({ source: 'WebApp', mode: 'auto', why }), {
+      fireAndForget: true,
+    })
+  } catch (e) {
+    /* non-fatal */
+  }
+}
 
 onMounted(async () => {
   try {
@@ -83,6 +132,7 @@ onMounted(async () => {
   window.addEventListener('online', () => {
     isOnline.value = true
     console.log('Network: Online')
+    tryAutoPullEdits('online')
   })
 
   window.addEventListener('offline', () => {
@@ -127,6 +177,8 @@ onMounted(async () => {
         }
         if (!Number.isFinite(pending) || pending < 0) pending = 0
         appConfig.fmPendingEdits = pending
+        // If there are pending edits and auto-pull is on, trigger sync
+        tryAutoPullEdits('poll')
         appConfig.lastFmStatusAt = new Date().toISOString()
       } catch {
         /* Non-fatal; ignore and retain previous value */
@@ -202,180 +254,7 @@ const runWebSyncNow = async () => {
   }
 }
 
-// Test methods for debug panel
-const testFSUpdatesHandler = async () => {
-  console.log('Testing FSUpdatesHandler...')
-
-  // Create mock updates data
-  const mockUpdates = [
-    {
-      id: 'test-update-1',
-      _table: 'TestTable',
-      _tsModFireStore: new Date(),
-      _ts: {
-        field1: { ts: Date.now() },
-        field2: { ts: Date.now() + 1000 }
-      },
-      field1: 'Test Value 1',
-      field2: 'Test Value 2',
-      batchTotalEdits: 2,
-      batchIdEdits: 'batch-123'
-    },
-    {
-      id: 'test-update-2',
-      _table: 'TestTable',
-      _tsModFireStore: new Date(),
-      _ts: {
-        field1: { ts: Date.now() + 2000 }
-      },
-      field1: 'Test Value 3',
-      batchTotalEdits: 2,
-      batchIdEdits: 'batch-123'
-    }
-  ]
-
-  const result = await window.BF.namedAction('FSUpdatesHandler', { updates: mockUpdates })
-  console.log('FSUpdatesHandler result:', result)
-}
-
-const testEditsUpdateStatus = async () => {
-  console.log('Testing editsUpdateStatus...')
-
-  const result = await window.BF.namedAction('editsUpdateStatus', {
-    currentState: '3',
-    pendingEdits: 5
-  })
-  console.log('editsUpdateStatus result:', result)
-}
-
-const testContainerDownloads = async () => {
-  console.log('Testing updatesContainerDownloads...')
-
-  const result = await window.BF.namedAction('updatesContainerDownloads', {
-    updates: {
-      totalContainers: 10,
-      completedContainers: 3
-    }
-  })
-  console.log('updatesContainerDownloads result:', result)
-}
-
-// Test FSUpdatesHandler with active device mode
-const testFSUpdatesHandlerActive = async () => {
-  console.log('Testing FSUpdatesHandler in active mode...')
-
-  // Temporarily switch to active mode
-  const originalMode = appConfig.device.deviceMode
-  appConfig.device.deviceMode = 'active'
-
-  // Create mock updates data
-  const mockUpdates = [
-    {
-      id: 'test-update-1',
-      _table: 'TestTable',
-      _tsModFireStore: new Date(),
-      _ts: {
-        field1: { ts: Date.now() },
-        field2: { ts: Date.now() + 1000 }
-      },
-      field1: 'Test Value 1',
-      field2: 'Test Value 2',
-      batchTotalEdits: 2,
-      batchIdEdits: 'batch-123'
-    },
-    {
-      id: 'test-update-2',
-      _table: 'TestTable',
-      _tsModFireStore: new Date(),
-      _ts: {
-        field1: { ts: Date.now() + 2000 }
-      },
-      field1: 'Test Value 3',
-      batchTotalEdits: 2,
-      batchIdEdits: 'batch-123'
-    }
-  ]
-
-  const result = await window.BF.namedAction('FSUpdatesHandler', { updates: mockUpdates })
-  console.log('FSUpdatesHandler active mode result:', result)
-
-  // Restore original mode
-  appConfig.device.deviceMode = originalMode
-  console.log(`Device mode restored to: ${originalMode}`)
-}
-
-// Test subscribeUpdates functionality
-const testSubscribeUpdates = async () => {
-  console.log('Testing subscribeUpdates...')
-
-  const result = await window.BF.namedAction('subscribeUpdates')
-  console.log('subscribeUpdates result:', result)
-}
-
-// Simulate a Firestore update for testing
-const simulateFirestoreUpdate = async () => {
-  console.log('Simulating Firestore update...')
-
-  // Create a mock snapshot that mimics what Firestore would send
-  const mockSnapshot = {
-    empty: false,
-    docChanges: () => [
-      {
-        type: 'added',
-        doc: {
-          id: 'simulated-update-' + Date.now(),
-          data: () => ({
-            id: 'simulated-update-' + Date.now(),
-            _table: 'SimulatedTable',
-            _tsModFireStore: new Date(),
-            _ts: {
-              field1: { ts: Date.now() * 1000 }, // Convert to microseconds like FileMaker
-              field2: { ts: (Date.now() + 1000) * 1000 }
-            },
-            field1: 'Simulated Value 1',
-            field2: 'Simulated Value 2',
-            updatedKeys: ['field1', 'field2'],
-            batchTotalEdits: 1,
-            batchIdEdits: 'simulated-batch-' + Date.now(),
-            _contexts: appConfig.device.contexts // Match device contexts
-          })
-        }
-      }
-    ]
-  }
-
-  // Directly call processSnapshot to simulate receiving an update
-  if (window.processSnapshot) {
-    window.processSnapshot(mockSnapshot, appConfig)
-  } else {
-    console.log('processSnapshot not available - this would normally be called by the Firestore listener')
-
-    // Manually trigger FSUpdatesHandler as a fallback
-    const mockUpdates = [{
-      id: 'simulated-update-' + Date.now(),
-      _table: 'SimulatedTable',
-      _tsModFireStore: new Date(),
-      _ts: {
-        field1: { ts: Date.now() * 1000 },
-        field2: { ts: (Date.now() + 1000) * 1000 }
-      },
-      field1: 'Simulated Value 1',
-      field2: 'Simulated Value 2',
-      batchTotalEdits: 1,
-      batchIdEdits: 'simulated-batch-' + Date.now()
-    }]
-
-    // Temporarily switch to active mode for the test
-    const originalMode = appConfig.device.deviceMode
-    appConfig.device.deviceMode = 'active'
-
-    const result = await window.BF.namedAction('FSUpdatesHandler', { updates: mockUpdates })
-    console.log('Simulated update result:', result)
-
-    // Restore original mode
-    appConfig.device.deviceMode = originalMode
-  }
-}
+/* Removed development-only test helpers */
 </script>
 
 <template>
@@ -499,7 +378,7 @@ const simulateFirestoreUpdate = async () => {
 
           <!-- COMBINED DEVICE + ORG CARD (compact) -->
           <div class="bg-gray-800 border border-gray-700 rounded-xl p-4 min-w-0 lg:col-span-2">
-            <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center justify-between mb-4">
               <div class="flex items-center space-x-2">
                 <div class="p-2 bg-indigo-600 bg-opacity-20 rounded-lg">
                   <svg class="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -507,7 +386,10 @@ const simulateFirestoreUpdate = async () => {
                       d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                   </svg>
                 </div>
-                <h2 class="text-sm font-semibold text-white">Device & Org</h2>
+                <div>
+                  <h2 class="text-lg font-bold text-white">Device</h2>
+                  <p class="text-xs text-gray-400">Configuration</p>
+                </div>
               </div>
             </div>
             <div class="space-y-2 text-xs">
@@ -547,19 +429,20 @@ const simulateFirestoreUpdate = async () => {
                     <span
                       class="px-2 py-1 bg-blue-600 bg-opacity-20 rounded-full text-xs font-semibold text-blue-400 uppercase tracking-wide">EDITS</span>
                   </div>
-                  <p class="text-xs text-gray-400">Local to Cloud Sync</p>
+                  <p class="text-xs text-gray-400">Local to WebSync</p>
                 </div>
               </div>
             </div>
 
             <div class="mb-3">
               <p class="text-sm text-gray-300">
-                {{ appConfig.editsTotal ? 'Uploading Edits' : appConfig.editsStates[appConfig.editsCurrentState] }}
+                {{ !isOnline ? 'Waiting for connectivity — uploads will resume automatically' : (sessionUploadTotal ?
+                  'Uploading Edits' : appConfig.editsStates[appConfig.editsCurrentState]) }}
               </p>
             </div>
 
-            <!-- Status snapshot: pending in FM and local pending writes -->
-            <div class="grid grid-cols-2 gap-4 text-xs mb-2">
+            <!-- Status snapshot: FM pending, Local unsynced, Uploaded this session -->
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs mb-2">
               <div class="flex items-center justify-between text-gray-400">
                 <span>FM pending edits</span>
                 <span class="text-white font-medium">{{ appConfig.fmPendingEdits }}</span>
@@ -568,25 +451,28 @@ const simulateFirestoreUpdate = async () => {
                 <span>Local unsynced</span>
                 <span class="text-white font-medium">{{ appConfig.editsLocalPendingWrites }}</span>
               </div>
+              <div class="flex items-center justify-between text-gray-400">
+                <span>Uploaded (session)</span>
+                <span class="text-white font-medium">{{ uploadedKpiCompleted }} / {{ uploadedKpiTotal }}</span>
+              </div>
             </div>
 
             <div v-if="appConfig.editsTotal || appConfig.editsContainersTotal" class="space-y-4">
               <!-- Uploading Progress (Edits Records) -->
-              <div v-if="appConfig.editsTotal" class="space-y-3">
+              <div v-if="sessionUploadTotal" class="space-y-3">
                 <div class="flex justify-between items-center">
                   <span class="text-gray-300 text-sm">Edits Upload Progress</span>
-                  <span class="text-blue-400 font-bold text-sm">{{ Math.round((appConfig.editsTotalCompleted /
-                    appConfig.editsTotal) * 100) }}%</span>
+                  <span class="text-blue-400 font-bold text-sm">{{ sessionUploadPercent }}%</span>
                 </div>
                 <div class="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
                   <div
                     class="bg-gradient-to-r from-blue-500 to-blue-400 h-1.5 rounded-full transition-all duration-700 ease-out"
-                    :style="`width: ${Math.min(Math.round((appConfig.editsTotalCompleted / appConfig.editsTotal) * 100), 100)}%`">
+                    :style="`width: ${Math.min(sessionUploadPercent, 100)}%`">
                   </div>
                 </div>
                 <div class="flex justify-between text-xs text-gray-400">
-                  <span>{{ appConfig.editsTotalCompleted }} completed</span>
-                  <span>{{ appConfig.editsTotal }} total</span>
+                  <span>{{ sessionUploadCompleted }} completed</span>
+                  <span>{{ sessionUploadTotal }} total</span>
                 </div>
               </div>
 
@@ -635,7 +521,7 @@ const simulateFirestoreUpdate = async () => {
                     <span
                       class="px-2 py-1 bg-green-600 bg-opacity-20 rounded-full text-xs font-semibold text-green-400 uppercase tracking-wide">UPDATES</span>
                   </div>
-                  <p class="text-xs text-gray-400">Cloud to Local Sync</p>
+                  <p class="text-xs text-gray-400">WebSync to Local</p>
                 </div>
               </div>
             </div>
@@ -717,8 +603,6 @@ const simulateFirestoreUpdate = async () => {
           </button>
         </div>
 
-
-
         <!-- Firestore Network Controls -->
         <div class="mb-8">
           <h4 class="text-sm font-semibold text-white mb-4">Firestore Network</h4>
@@ -737,6 +621,22 @@ const simulateFirestoreUpdate = async () => {
               class="bg-green-600 hover:bg-green-700 text-white py-3 px-4 rounded-xl font-medium transition-colors">
               Go Online
             </button>
+          </div>
+        </div>
+
+        <!-- Upload Settings -->
+        <div class="mb-8">
+          <h4 class="text-sm font-semibold text-white mb-4">Upload Settings</h4>
+          <div class="flex items-center justify-between">
+            <span class="text-gray-400"
+              title="When enabled, new FileMaker edits are auto-imported to local Firestore when online; if offline, they import on reconnect.">Auto
+              pull edits to local</span>
+            <label class="inline-flex items-center gap-3">
+              <input type="checkbox" :checked="appConfig.configx.autoPullEdits"
+                @change="(e) => { appConfig.setAutoPullEdits(e.target.checked); if (e.target.checked) tryAutoPullEdits('toggle'); }"
+                class="w-5 h-5 rounded border-gray-600 bg-gray-700" />
+              <span class="text-xs text-gray-400">URL param overrides and is saved</span>
+            </label>
           </div>
         </div>
 
@@ -786,38 +686,6 @@ const simulateFirestoreUpdate = async () => {
             </div>
           </div>
         </div>
-
-        <!-- Test Actions -->
-        <div class="mb-8 border-t border-gray-700 pt-6">
-          <h4 class="text-sm font-semibold text-white mb-4">Test Actions</h4>
-          <div class="space-y-3">
-            <button @click="testFSUpdatesHandler"
-              class="w-full bg-purple-600 hover:bg-purple-700 text-white py-2 px-4 rounded-lg font-medium transition-colors text-sm">
-              Test FSUpdatesHandler
-            </button>
-            <button @click="testEditsUpdateStatus"
-              class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 px-4 rounded-lg font-medium transition-colors text-sm">
-              Test Edits Update Status
-            </button>
-            <button @click="testContainerDownloads"
-              class="w-full bg-teal-600 hover:bg-teal-700 text-white py-2 px-4 rounded-lg font-medium transition-colors text-sm">
-              Test Container Downloads
-            </button>
-            <button @click="testFSUpdatesHandlerActive"
-              class="w-full bg-teal-600 hover:bg-teal-700 text-white py-2 px-4 rounded-lg font-medium transition-colors text-sm">
-              Test FSUpdatesHandler in Active Mode
-            </button>
-            <button @click="testSubscribeUpdates"
-              class="w-full bg-orange-600 hover:bg-orange-700 text-white py-2 px-4 rounded-lg font-medium transition-colors text-sm">
-              Test Subscribe Updates
-            </button>
-            <button @click="simulateFirestoreUpdate"
-              class="w-full bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded-lg font-medium transition-colors text-sm">
-              Simulate Firestore Update
-            </button>
-          </div>
-        </div>
-
 
       </div>
     </div>

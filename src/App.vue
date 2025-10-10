@@ -374,10 +374,10 @@ const runWebSyncNow = async () => {
 
       <!-- SYNC OPERATIONS SECTION -->
       <div class="px-0 py-4">
-        <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 px-3 sm:px-4 max-w-screen-2xl mx-auto">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 px-2 sm:px-4 max-w-screen-2xl mx-auto">
 
           <!-- COMBINED DEVICE + ORG CARD (compact) -->
-          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4 min-w-0 lg:col-span-2">
+          <div class="bg-gray-800 border border-gray-700 rounded-xl p-3 sm:p-4 lg:col-span-2">
             <div class="flex items-center justify-between mb-4">
               <div class="flex items-center space-x-2">
                 <div class="p-2 bg-indigo-600 bg-opacity-20 rounded-lg">
@@ -393,28 +393,28 @@ const runWebSyncNow = async () => {
               </div>
             </div>
             <div class="space-y-2 text-xs">
-              <div class="flex items-center justify-between">
-                <span class="text-gray-400">Device:</span>
-                <span class="text-white font-mono">{{ appConfig.device.id }}</span>
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-gray-400 shrink-0">Device:</span>
+                <span class="text-white font-mono text-right break-all">{{ appConfig.device.id }}</span>
               </div>
-              <div class="flex items-center justify-between">
-                <span class="text-gray-400">Mode:</span>
-                <span class="px-2 py-0.5 bg-gray-700 rounded text-[10px] text-white font-medium">{{
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-gray-400 shrink-0">Mode:</span>
+                <span class="px-2 py-0.5 bg-gray-700 rounded text-[10px] text-white font-medium shrink-0">{{
                   appConfig.device.deviceMode }}</span>
               </div>
-              <div class="flex items-center justify-between">
-                <span class="text-gray-400">Org:</span>
-                <span class="text-white font-mono">{{ appConfig.organization.id }}</span>
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-gray-400 shrink-0">Org:</span>
+                <span class="text-white font-mono text-right break-all">{{ appConfig.organization.id }}</span>
               </div>
-              <div class="flex items-center justify-between">
-                <span class="text-gray-400">Contexts:</span>
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-gray-400 shrink-0">Contexts:</span>
                 <span class="text-white">{{ appConfig.device.contexts.length }}</span>
               </div>
             </div>
           </div>
 
           <!-- EDITS PANEL -->
-          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4 min-w-0 lg:col-span-5">
+          <div class="bg-gray-800 border border-gray-700 rounded-xl p-3 sm:p-4 lg:col-span-5">
             <div class="flex items-center justify-between mb-4">
               <div class="flex items-center space-x-3">
                 <div class="p-2 bg-blue-600 bg-opacity-20 rounded-lg">
@@ -442,17 +442,17 @@ const runWebSyncNow = async () => {
             </div>
 
             <!-- Status snapshot: FM pending, Local unsynced, Uploaded this session -->
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs mb-2">
-              <div class="flex items-center justify-between text-gray-400">
-                <span>FM pending edits</span>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs mb-2">
+              <div class="flex items-center justify-between gap-2 text-gray-400">
+                <span class="shrink-0">FM pending edits</span>
                 <span class="text-white font-medium">{{ appConfig.fmPendingEdits }}</span>
               </div>
-              <div class="flex items-center justify-between text-gray-400">
-                <span>Local unsynced</span>
+              <div class="flex items-center justify-between gap-2 text-gray-400">
+                <span class="shrink-0">Local unsynced</span>
                 <span class="text-white font-medium">{{ appConfig.editsLocalPendingWrites }}</span>
               </div>
-              <div class="flex items-center justify-between text-gray-400">
-                <span>Uploaded (session)</span>
+              <div class="flex items-center justify-between gap-2 text-gray-400">
+                <span class="shrink-0">Uploaded (session)</span>
                 <span class="text-white font-medium">{{ uploadedKpiCompleted }} / {{ uploadedKpiTotal }}</span>
               </div>
             </div>
@@ -505,7 +505,7 @@ const runWebSyncNow = async () => {
           </div>
 
           <!-- UPDATES PANEL -->
-          <div class="bg-gray-800 border border-gray-700 rounded-xl p-4 min-w-0 lg:col-span-5">
+          <div class="bg-gray-800 border border-gray-700 rounded-xl p-3 sm:p-4 lg:col-span-5">
             <div class="flex items-center justify-between mb-4">
               <div class="flex items-center space-x-3">
                 <div class="p-2 bg-green-600 bg-opacity-20 rounded-lg">

@@ -17,6 +17,19 @@ export default defineConfig({
       },
     },
     cssMinify: true,
+    // Ensure service worker and manifest are copied to dist
+    // Files in /public are automatically copied by Vite
+    rollupOptions: {
+      output: {
+        // Don't hash service worker filename so it's always accessible at /sw.js
+        assetFileNames: (assetInfo) => {
+          if (assetInfo.name === 'sw.js') {
+            return '[name][extname]'
+          }
+          return '[name]-[hash][extname]'
+        },
+      },
+    },
   },
   resolve: {
     alias: {

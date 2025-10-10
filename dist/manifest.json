@@ -1,0 +1,21 @@
+{
+  "name": "WebSync",
+  "short_name": "WebSync",
+  "description": "FileMaker WebSync Dashboard - Sync data between FileMaker and Firebase",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#2563eb",
+  "orientation": "any",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "any",
+      "type": "image/x-icon"
+    }
+  ],
+  "categories": ["productivity", "utilities"],
+  "prefer_related_applications": false
+}
+

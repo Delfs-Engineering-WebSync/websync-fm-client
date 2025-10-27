@@ -4,6 +4,7 @@ import { initializeFirebaseServices, goFirestoreOffline, goFirestoreOnline } fro
 import { fmBridgit } from './fileMakerBridge'
 import './utils/betterFormsUtils' // Initialize BF utilities globally
 import { onMounted, ref, computed, watch, onUnmounted } from 'vue'
+import packageJson from '../package.json'
 
 const appConfig = useAppConfigStore()
 const firebaseStatus = ref('Initializing...')
@@ -11,6 +12,8 @@ const showDebugControls = ref(false)
 const isOnline = ref(navigator.onLine)
 const isFirestoreOffline = ref(false)
 let fmStatusIntervalId = null
+
+const appVersion = packageJson?.version
 
 // Debounce: only show "System Up to Date" after 1s of inactivity
 const showUpdatesIdleState = ref(true)
@@ -107,7 +110,7 @@ const tryAutoPullEdits = async (why = 'watcher') => {
     fmBridgit.performScript('Start Sync', JSON.stringify({ source: 'WebApp', mode: 'auto', why }), {
       fireAndForget: true,
     })
-  } catch (e) {
+  } catch {
     /* non-fatal */
   }
 }
@@ -410,6 +413,10 @@ const runWebSyncNow = async () => {
                 <span class="text-gray-400 shrink-0">Contexts:</span>
                 <span class="text-white">{{ appConfig.device.contexts.length }}</span>
               </div>
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-gray-400 shrink-0">Version:</span>
+                <span class="text-white font-mono text-right">{{ appVersion }}</span>
+              </div>
             </div>
           </div>
 
@@ -531,6 +538,22 @@ const runWebSyncNow = async () => {
               <p class="text-sm text-gray-300">
                 {{ appConfig.updatesTotal ? 'Receiving Updates' : 'No New Updates' }}
               </p>
+            </div>
+
+            <!-- KPI row placeholder to EXACTLY mirror the uploads panel structure -->
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs mb-2">
+              <div class="flex items-center justify-between gap-2 text-gray-400">
+                <span class="shrink-0">FM pending edits</span>
+                <span class="text-white font-medium">0</span>
+              </div>
+              <div class="flex items-center justify-between gap-2 text-gray-400">
+                <span class="shrink-0">Local unsynced</span>
+                <span class="text-white font-medium">0</span>
+              </div>
+              <div class="flex items-center justify-between gap-2 text-gray-400">
+                <span class="shrink-0">Uploaded (session)</span>
+                <span class="text-white font-medium">0 / 0</span>
+              </div>
             </div>
 
             <div v-if="appConfig.updatesTotal" class="space-y-4">

@@ -8,6 +8,7 @@ import {
   collection,
   setDoc,
   onSnapshot,
+  getDoc
 } from 'firebase/firestore'
 import { firebaseConfig } from './firebaseConfig' // Your Firebase project credentials
 import { useAppConfigStore } from './stores/appConfig'
@@ -136,7 +137,32 @@ async function setupFirestoreListenersAndChecks() {
     console.log('Firestore references exposed globally for BetterForms compatibility')
   }
 
-  // Set up the updates subscription
+  // First, hydrate the device timestamp from Firebase before setting up subscription
+  try {
+    const appConfig = useAppConfigStore()
+    if (fsDeviceDocRef) {
+      const deviceSnap = await getDoc(fsDeviceDocRef)
+      if (deviceSnap.exists()) {
+        const tsField = deviceSnap.data()?.tsModFireStoreLastUpdate
+        if (tsField) {
+          const isoString =
+            typeof tsField.toDate === 'function'
+              ? tsField.toDate().toISOString()
+              : new Date(tsField).toISOString()
+          appConfig.device.tsModFireStoreLastUpdate = isoString
+          console.log('Hydrated device timestamp from Firebase:', isoString)
+        } else {
+          console.log('No tsModFireStoreLastUpdate field found in Firebase device document')
+        }
+      } else {
+        console.log('Device document does not exist in Firebase yet')
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to hydrate device timestamp:', error)
+  }
+
+  // Now set up the updates subscription with the hydrated timestamp
   try {
     const { namedAction } = await import('./utils/betterFormsUtils')
     const result = await namedAction('subscribeUpdates')

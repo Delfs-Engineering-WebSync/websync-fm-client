@@ -115,12 +115,6 @@ export const useAppConfigStore = defineStore('appConfig', {
       this.device.deviceType = getQueryParam('deviceType') || this.device.deviceType || 'webApp'
       this.configx.deviceType = this.device.deviceType
 
-      if (this.device.deviceType === 'webApp') {
-        const now = new Date()
-        this.device.tsModFireStoreLastUpdate = now
-        this.configx.tsModFireStoreLastUpdate = now.toISOString()
-      }
-
       // Load persisted auto flags
       try {
         const persistedPull = window.localStorage.getItem('ws-auto-pull-edits')

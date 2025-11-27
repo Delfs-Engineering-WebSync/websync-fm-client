@@ -140,7 +140,10 @@ async function sendUpdatesToDatabase(appConfig) {
         appConfig.updatesTotalCompleted += batch.length
 
         // Process batch completion logic
-        updatesBatchesObject(batch, appConfig)
+        const timestampUpdated = updatesBatchesObject(batch, appConfig)
+        if (timestampUpdated) {
+          updatedTsModFireStoreLastUpdate = true
+        }
 
         // Remove processed items from queue
         appConfig.updatesQueue.splice(0, batch.length)
@@ -238,6 +241,8 @@ function updatesBatchesObject(batch, appConfig) {
   }
 
   // Process each edit in the batch
+  let timestampUpdated = false
+
   batch.forEach((edit) => {
     if (edit.batchIdEdits) {
       compareCurrentTs(edit.batchIdEdits, edit._tsModFireStore)
@@ -249,7 +254,7 @@ function updatesBatchesObject(batch, appConfig) {
         // Batch complete - update timestamp
         appConfig.device.tsModFireStoreLastUpdate = tsToIsoString(batchInfo.latestTs)
         delete appConfig.updatesBatches[edit.batchIdEdits]
-        return true // Signal that timestamp was updated
+        timestampUpdated = true
       } else {
         // Batch not complete - increment counter
         batchInfo.totalReceived = totalReceived + 1
@@ -257,7 +262,7 @@ function updatesBatchesObject(batch, appConfig) {
     }
   })
 
-  return false
+  return timestampUpdated
 }
 
 // Handle editsUpdateStatus action

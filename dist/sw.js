@@ -99,3 +99,4 @@ self.addEventListener('message', (event) => {
     )
   }
 })
+

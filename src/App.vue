@@ -3,12 +3,14 @@ import { useAppConfigStore } from './stores/appConfig'
 import { initializeFirebaseServices, goFirestoreOffline, goFirestoreOnline } from './firebaseInit'
 import { fmBridgit } from './fileMakerBridge'
 import './utils/betterFormsUtils' // Initialize BF utilities globally
+import { installDevLogger } from './utils/devLogger'
 import { onMounted, ref, computed, watch, onUnmounted } from 'vue'
 import packageJson from '../package.json'
 
 const appConfig = useAppConfigStore()
 const firebaseStatus = ref('Initializing...')
 const showDebugControls = ref(false)
+const showLogViewer = ref(false)
 const isOnline = ref(navigator.onLine)
 const isFirestoreOffline = ref(false)
 let fmStatusIntervalId = null
@@ -101,6 +103,43 @@ const systemStatus = computed(() => {
   return 'idle'
 })
 
+const handleDevLoggingToggle = (value) => {
+  appConfig.setDevLoggingEnabled(value)
+}
+
+const openLogViewer = () => {
+  showLogViewer.value = true
+}
+
+const closeLogViewer = () => {
+  showLogViewer.value = false
+}
+
+const clearDevLogs = () => {
+  appConfig.clearDevLogs()
+}
+
+const getLogBadgeClass = (level) => {
+  switch (level) {
+    case 'error':
+      return 'text-red-300 border border-red-500/40 bg-red-500/10'
+    case 'warn':
+      return 'text-yellow-300 border border-yellow-500/40 bg-yellow-500/10'
+    case 'info':
+      return 'text-blue-300 border border-blue-500/40 bg-blue-500/10'
+    default:
+      return 'text-gray-200 border border-gray-600 bg-gray-700/30'
+  }
+}
+
+const formatLogTimestamp = (isoString) => {
+  try {
+    return new Date(isoString).toLocaleTimeString([], { hour12: false })
+  } catch {
+    return isoString
+  }
+}
+
 // Auto-pull FM edits when enabled and pending exist (runs regardless of online/offline)
 const tryAutoPullEdits = async (why = 'watcher') => {
   try {
@@ -117,6 +156,8 @@ const tryAutoPullEdits = async (why = 'watcher') => {
 
 onMounted(async () => {
   try {
+    appConfig.initializeDevLoggingSettings()
+    installDevLogger()
     // Initialize BetterForms utilities (global BF object)
     console.log('BetterForms utilities initialized:', typeof window.BF !== 'undefined' ? 'BF available globally' : 'BF not found')
 
@@ -663,56 +704,93 @@ const runWebSyncNow = async () => {
           </div>
         </div>
 
-        <!-- Progress Simulation -->
+        <!-- Console Logging -->
         <div class="mb-8">
-          <h4 class="text-sm font-semibold text-white mb-4">Simulate Progress</h4>
-          <div class="space-y-4">
-            <div class="flex items-center justify-between">
-              <label class="text-gray-400 text-sm">Edits:</label>
-              <div class="flex items-center space-x-2">
-                <input v-model.number="appConfig.editsTotalCompleted" type="number"
-                  class="w-20 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm" min="0" />
-                <span class="text-gray-500">/</span>
-                <input v-model.number="appConfig.editsTotal" type="number"
-                  class="w-20 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm" min="0" />
-              </div>
-            </div>
-            <div class="flex items-center justify-between">
-              <label class="text-gray-400 text-sm">Upload Containers:</label>
-              <div class="flex items-center space-x-2">
-                <input v-model.number="appConfig.editsContainersComplete" type="number"
-                  class="w-20 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm" min="0" />
-                <span class="text-gray-500">/</span>
-                <input v-model.number="appConfig.editsContainersTotal" type="number"
-                  class="w-20 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm" min="0" />
-              </div>
-            </div>
-            <div class="flex items-center justify-between">
-              <label class="text-gray-400 text-sm">Updates:</label>
-              <div class="flex items-center space-x-2">
-                <input v-model.number="appConfig.updatesTotalCompleted" type="number"
-                  class="w-20 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm" min="0" />
-                <span class="text-gray-500">/</span>
-                <input v-model.number="appConfig.updatesTotal" type="number"
-                  class="w-20 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm" min="0" />
-              </div>
-            </div>
-            <div class="flex items-center justify-between">
-              <label class="text-gray-400 text-sm">Containers:</label>
-              <div class="flex items-center space-x-2">
-                <input v-model.number="appConfig.updateCompletedContainers" type="number"
-                  class="w-20 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm" min="0" />
-                <span class="text-gray-500">/</span>
-                <input v-model.number="appConfig.updateTotalContainers" type="number"
-                  class="w-20 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm" min="0" />
-              </div>
-            </div>
+          <h4 class="text-sm font-semibold text-white mb-4">Console Logging</h4>
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-gray-400">Persist log capture for in-app inspection</span>
+            <label class="inline-flex items-center gap-3">
+              <input type="checkbox" :checked="appConfig.devLoggingEnabled"
+                @change="(e) => handleDevLoggingToggle(e.target.checked)"
+                class="w-5 h-5 rounded border-gray-600 bg-gray-700" />
+              <span class="text-xs text-gray-400">Persists until disabled</span>
+            </label>
           </div>
+          <div class="flex flex-wrap gap-3">
+            <button @click="openLogViewer"
+              class="flex-1 min-w-[140px] bg-gray-700 hover:bg-gray-600 text-white py-2 px-4 rounded-xl font-medium transition-colors">
+              View Logs ({{ appConfig.devLogs.length }})
+            </button>
+            <button @click="clearDevLogs"
+              class="flex-1 min-w-[140px] bg-gray-800 hover:bg-gray-700 text-gray-200 py-2 px-4 rounded-xl font-medium transition-colors border border-gray-600 disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="!appConfig.devLogs.length">
+              Clear Logs
+            </button>
+          </div>
+          <p v-if="appConfig.devLogs.length" class="text-xs text-gray-500 mt-2">
+            Turning logging off clears captured entries automatically.
+          </p>
         </div>
 
       </div>
     </div>
 
+  </div>
+
+  <!-- LOG VIEWER OVERLAY -->
+  <div v-if="showLogViewer"
+    class="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-start justify-center p-4 overflow-y-auto"
+    @click="closeLogViewer">
+    <div class="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-3xl my-8 shadow-2xl" @click.stop>
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h3 class="text-xl font-bold text-white">Console Log Viewer</h3>
+          <p class="text-sm text-gray-400">
+            Logging is {{ appConfig.devLoggingEnabled ? 'enabled' : 'disabled' }} — entries clear when logging is
+            turned off.
+          </p>
+        </div>
+        <button @click="closeLogViewer" class="text-gray-400 hover:text-white">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        </button>
+      </div>
+
+      <div class="flex items-center justify-between mb-4">
+        <span class="text-sm text-gray-400">{{ appConfig.devLogs.length }} entries captured this session</span>
+        <div class="flex gap-3">
+          <button @click="clearDevLogs"
+            class="px-4 py-2 rounded-xl border border-gray-600 text-gray-200 text-sm hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
+            :disabled="!appConfig.devLogs.length">
+            Clear Logs
+          </button>
+          <button @click="handleDevLoggingToggle(!appConfig.devLoggingEnabled)"
+            class="px-4 py-2 rounded-xl text-sm font-medium"
+            :class="appConfig.devLoggingEnabled ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-green-600 hover:bg-green-700 text-white'">
+            {{ appConfig.devLoggingEnabled ? 'Disable Logging' : 'Enable Logging' }}
+          </button>
+        </div>
+      </div>
+
+      <div class="bg-gray-950 border border-gray-800 rounded-xl max-h-[60vh] overflow-y-auto divide-y divide-gray-900">
+        <template v-if="appConfig.devLogs.length">
+          <div v-for="log in appConfig.devLogs" :key="log.id" class="px-4 py-3 space-y-2">
+            <div class="flex items-center justify-between gap-3">
+              <span class="font-mono text-xs text-gray-500">{{ formatLogTimestamp(log.timestamp) }}</span>
+              <span
+                :class="['px-2 py-0.5 rounded-full text-xs font-semibold tracking-wide uppercase', getLogBadgeClass(log.level)]">
+                {{ log.level }}
+              </span>
+            </div>
+            <p class="text-sm text-gray-200 whitespace-pre-wrap break-words">{{ log.message }}</p>
+          </div>
+        </template>
+        <div v-else class="py-10 text-center text-gray-500">
+          No logs captured yet. Enable logging in the debug controls to start collecting entries.
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 

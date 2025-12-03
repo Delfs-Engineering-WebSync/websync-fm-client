@@ -269,47 +269,30 @@ function updatesBatchesObject(batch, appConfig) {
 async function handleEditsUpdateStatus(options) {
   const appConfig = useAppConfigStore()
 
-  log(
-    `[DEBUG] handleEditsUpdateStatus called with options: ${JSON.stringify(options, null, 2)}`,
-    'info',
-  )
-  log(`[DEBUG] Current appConfig state before update:`, 'info')
-  log(`[DEBUG] - editsCurrentState: ${appConfig.editsCurrentState}`, 'info')
-  log(`[DEBUG] - editsTotalPending: ${appConfig.editsTotalPending}`, 'info')
-
   try {
+    const prevState = appConfig.editsCurrentState
+    const prevPending = appConfig.editsTotalPending
+
     if (options.currentState) {
-      log(
-        `[DEBUG] Updating editsCurrentState from ${appConfig.editsCurrentState} to ${options.currentState}`,
-        'info',
-      )
       appConfig.editsCurrentState = options.currentState
     }
 
     if (typeof options.pendingEdits !== 'undefined') {
-      log(
-        `[DEBUG] Updating editsTotalPending from ${appConfig.editsTotalPending} to ${options.pendingEdits}`,
-        'info',
-      )
       appConfig.editsTotalPending = options.pendingEdits
     }
 
-    log(`[DEBUG] Final appConfig state after update:`, 'info')
-    log(`[DEBUG] - editsCurrentState: ${appConfig.editsCurrentState}`, 'info')
-    log(`[DEBUG] - editsTotalPending: ${appConfig.editsTotalPending}`, 'info')
+    if (prevState !== appConfig.editsCurrentState || prevPending !== appConfig.editsTotalPending) {
+      log(
+        `[editsUpdateStatus] state ${prevState}→${appConfig.editsCurrentState}, pending ${prevPending}→${appConfig.editsTotalPending}`,
+        'info',
+      )
+    }
 
     // Return success to FileMaker
     if (typeof fmBridgit !== 'undefined') {
-      log(`[DEBUG] fmBridgit available, calling returnResult with status: ok`, 'info')
       try {
-        const result = await fmBridgit.returnResult({ status: 'ok' })
-        log(
-          `[DEBUG] fmBridgit.returnResult completed successfully: ${JSON.stringify(result)}`,
-          'info',
-        )
-      } catch (error) {
-        log(`[WARN] fmBridgit.returnResult failed: ${error.message}`, 'warn')
-        log(`[WARN] This is expected behavior - FileMaker may reject some acknowledgments`, 'warn')
+        await fmBridgit.returnResult({ status: 'ok' })
+      } catch {
         // Continue execution even if FileMaker acknowledgment fails
       }
     } else {
@@ -317,7 +300,6 @@ async function handleEditsUpdateStatus(options) {
     }
 
     const result = { success: true, message: 'Edit status updated' }
-    log(`[DEBUG] handleEditsUpdateStatus returning: ${JSON.stringify(result, null, 2)}`, 'info')
     return Promise.resolve(result)
   } catch (error) {
     log(`[ERROR] Error in handleEditsUpdateStatus: ${error.message}`, 'error')
@@ -777,10 +759,6 @@ function processSnapshot(snapshot, appConfig) {
 // Equivalent to BF.namedAction() - but uses Pinia actions instead
 export function namedAction(actionName, options = {}) {
   const appConfig = useAppConfigStore()
-
-  log(`[DEBUG] namedAction called: ${actionName}`, 'info')
-  log(`[DEBUG] namedAction options: ${JSON.stringify(options, null, 2)}`, 'info')
-  log(`[DEBUG] namedAction timestamp: ${new Date().toISOString()}`, 'info')
 
   let result
 

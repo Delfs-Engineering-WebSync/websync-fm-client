@@ -88,6 +88,9 @@ export const useAppConfigStore = defineStore('appConfig', {
       lastCompleted: 0,
       endedAt: null,
     },
+    devLoggingEnabled: false,
+    devLogs: [],
+    devLogsMaxEntries: 500,
   }),
   actions: {
     initializeConfigFromURLParams() {
@@ -210,6 +213,42 @@ export const useAppConfigStore = defineStore('appConfig', {
       this.sessionUpload.total = 0
       this.sessionUpload.baselineCompleted = 0
       this.sessionUpload.startedAt = null
+    },
+    initializeDevLoggingSettings() {
+      try {
+        const persisted = window.localStorage.getItem('ws-dev-logs-enabled')
+        this.devLoggingEnabled = persisted === '1'
+      } catch {
+        this.devLoggingEnabled = false
+      }
+    },
+    setDevLoggingEnabled(value) {
+      const enabled = !!value
+      this.devLoggingEnabled = enabled
+      try {
+        window.localStorage.setItem('ws-dev-logs-enabled', enabled ? '1' : '0')
+      } catch {
+        /* storage optional */
+      }
+      if (!enabled) {
+        this.clearDevLogs()
+      }
+    },
+    addDevLogEntry(entry = {}) {
+      const newEntry = {
+        id: entry.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        timestamp: entry.timestamp || new Date().toISOString(),
+        level: entry.level || 'log',
+        message: entry.message || '',
+      }
+      this.devLogs.push(newEntry)
+      if (this.devLogs.length > this.devLogsMaxEntries) {
+        const excess = this.devLogs.length - this.devLogsMaxEntries
+        this.devLogs.splice(0, excess)
+      }
+    },
+    clearDevLogs() {
+      this.devLogs = []
     },
     // We will add more actions here as we translate other parts of your initFirestore script
   },

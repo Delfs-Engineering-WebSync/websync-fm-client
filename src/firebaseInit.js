@@ -8,7 +8,7 @@ import {
   collection,
   setDoc,
   onSnapshot,
-  getDoc
+  getDoc,
 } from 'firebase/firestore'
 import { firebaseConfig } from './firebaseConfig' // Your Firebase project credentials
 import { useAppConfigStore } from './stores/appConfig'
@@ -25,6 +25,7 @@ let fsDeviceDocRef = null
 let fsUpdatesCollectionRef = null
 let fsEditsCollectionRef = null
 let fsEditsRefUnsubscribe = null
+let lastPendingWritesSignature = ''
 
 async function checkParentDocuments() {
   const appConfig = useAppConfigStore()
@@ -182,10 +183,25 @@ async function setupFirestoreListenersAndChecks() {
         fsEditsCollectionRef,
         { includeMetadataChanges: true },
         (snapshot) => {
-          let pending = 0
-          snapshot.docs.forEach((docSnap) => {
-            if (docSnap.metadata && docSnap.metadata.hasPendingWrites) pending += 1
-          })
+          const docStates = snapshot.docs.map((docSnap) => ({
+            id: docSnap.id,
+            pending: !!docSnap.metadata?.hasPendingWrites,
+            fromCache: !!docSnap.metadata?.fromCache,
+          }))
+          const pending = docStates.filter((doc) => doc.pending).length
+          const signature = `${pending}:${docStates
+            .map((doc) => `${doc.pending ? 'P' : 'C'}-${doc.id}`)
+            .join('|')}`
+
+          if (signature !== lastPendingWritesSignature) {
+            lastPendingWritesSignature = signature
+            console.log('[EditsPending]', {
+              timestamp: new Date().toISOString(),
+              pendingCount: pending,
+              docStates,
+            })
+          }
+
           appConfig.editsLocalPendingWrites = pending
         },
         (error) => {

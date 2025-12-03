@@ -1,6 +1,7 @@
 import './consoleFileMakerBridge.js'
 import './assets/main.css'
 
+import { installDevLogger } from './utils/devLogger'
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
@@ -14,6 +15,9 @@ import { faArrowsSpin, faArrowsRotate } from '@fortawesome/free-solid-svg-icons'
 
 /* add icons to the library */
 library.add(faArrowsSpin, faArrowsRotate)
+
+// Capture console output as early as possible
+installDevLogger()
 
 const app = createApp(App)
 

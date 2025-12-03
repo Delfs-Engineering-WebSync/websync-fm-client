@@ -1,6 +1,7 @@
-import { useAppConfigStore } from '../stores/appConfig'
-
 let loggerInstalled = false
+let storeRef = null
+const bufferedEntries = []
+const BUFFER_LIMIT = 1000
 const METHODS = ['log', 'info', 'warn', 'error']
 
 function formatArgs(args) {
@@ -26,9 +27,50 @@ function formatArgs(args) {
   }
 }
 
+function getPersistedEnabledFlag() {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      return window.localStorage.getItem('ws-dev-logs-enabled') === '1'
+    }
+  } catch {
+    /* storage unavailable */
+  }
+  return false
+}
+
+function isLoggingEnabled() {
+  if (storeRef) return !!storeRef.devLoggingEnabled
+  return getPersistedEnabledFlag()
+}
+
+function recordEntry(entry) {
+  if (!isLoggingEnabled()) return
+  if (storeRef && typeof storeRef.addDevLogEntry === 'function') {
+    storeRef.addDevLogEntry(entry)
+    return
+  }
+  bufferedEntries.push(entry)
+  if (bufferedEntries.length > BUFFER_LIMIT) {
+    bufferedEntries.splice(0, bufferedEntries.length - BUFFER_LIMIT)
+  }
+}
+
+export function connectDevLoggerStore(store) {
+  storeRef = store
+  if (!storeRef) return
+  if (typeof storeRef.initializeDevLoggingSettings === 'function') {
+    storeRef.initializeDevLoggingSettings()
+  }
+  if (!storeRef.devLoggingEnabled) {
+    bufferedEntries.length = 0
+    return
+  }
+  bufferedEntries.forEach((entry) => storeRef.addDevLogEntry(entry))
+  bufferedEntries.length = 0
+}
+
 export function installDevLogger() {
-  if (loggerInstalled) return
-  const store = useAppConfigStore()
+  if (loggerInstalled || typeof console === 'undefined') return
   METHODS.forEach((method) => {
     const original = console[method]
     if (typeof original !== 'function') return
@@ -36,14 +78,12 @@ export function installDevLogger() {
 
     const patched = function (...args) {
       try {
-        if (store?.devLoggingEnabled) {
-          store.addDevLogEntry({
-            level: method,
-            message: formatArgs(args),
-          })
-        }
+        recordEntry({
+          level: method,
+          message: formatArgs(args),
+        })
       } catch {
-        // Swallow logging errors so we never break console output
+        /* swallow logger errors */
       }
       return original.apply(this, args)
     }
@@ -54,4 +94,3 @@ export function installDevLogger() {
   })
   loggerInstalled = true
 }
-

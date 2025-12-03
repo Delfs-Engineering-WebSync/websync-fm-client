@@ -3,7 +3,7 @@ import { useAppConfigStore } from './stores/appConfig'
 import { initializeFirebaseServices, goFirestoreOffline, goFirestoreOnline } from './firebaseInit'
 import { fmBridgit } from './fileMakerBridge'
 import './utils/betterFormsUtils' // Initialize BF utilities globally
-import { installDevLogger } from './utils/devLogger'
+import { connectDevLoggerStore } from './utils/devLogger'
 import { onMounted, ref, computed, watch, onUnmounted } from 'vue'
 import packageJson from '../package.json'
 
@@ -14,6 +14,7 @@ const showLogViewer = ref(false)
 const isOnline = ref(navigator.onLine)
 const isFirestoreOffline = ref(false)
 let fmStatusIntervalId = null
+let swControllerChangeHandler = null
 
 const appVersion = packageJson?.version
 
@@ -140,6 +141,171 @@ const formatLogTimestamp = (isoString) => {
   }
 }
 
+// Service Worker Diagnostics
+const serviceWorkerSupported = ref(typeof navigator !== 'undefined' && 'serviceWorker' in navigator)
+const serviceWorkerStatus = ref(serviceWorkerSupported.value ? 'checking' : 'unsupported')
+const serviceWorkerMessage = ref(
+  serviceWorkerSupported.value
+    ? 'Checking service worker status...'
+    : 'Service workers are not supported in this context.',
+)
+const serviceWorkerRegistrations = ref([])
+const serviceWorkerChecking = ref(false)
+const serviceWorkerClearing = ref(false)
+const serviceWorkerUpdating = ref(false)
+
+const refreshServiceWorkerStatus = async () => {
+  if (!serviceWorkerSupported.value || typeof navigator === 'undefined') return
+  serviceWorkerChecking.value = true
+  try {
+    const regs = await navigator.serviceWorker.getRegistrations()
+    serviceWorkerRegistrations.value = regs
+    if (!regs.length) {
+      serviceWorkerStatus.value = 'not-registered'
+      serviceWorkerMessage.value = 'No service worker registrations found for this origin.'
+      return
+    }
+    const hasController = !!navigator.serviceWorker.controller
+    serviceWorkerStatus.value = hasController ? 'active' : 'installing'
+    const scopes = regs
+      .map((reg) => {
+        try {
+          const scopeUrl = new URL(reg.scope)
+          return scopeUrl.pathname || scopeUrl.href
+        } catch {
+          return reg.scope
+        }
+      })
+      .join(', ')
+    serviceWorkerMessage.value = `Registered ${hasController ? '(active)' : '(installing)'
+      } with scope${regs.length > 1 ? 's' : ''}: ${scopes}`
+  } catch (error) {
+    serviceWorkerStatus.value = 'error'
+    serviceWorkerMessage.value = `Failed to read service worker status: ${error?.message || error}`
+  } finally {
+    serviceWorkerChecking.value = false
+  }
+}
+
+const clearServiceWorkersAndCaches = async () => {
+  if (!serviceWorkerSupported.value || typeof navigator === 'undefined') return
+  serviceWorkerClearing.value = true
+  try {
+    const regs = await navigator.serviceWorker.getRegistrations()
+    await Promise.all(
+      regs.map((reg) =>
+        reg
+          .unregister()
+          .catch(() => {
+            /* ignore */
+          }),
+      ),
+    )
+
+    if (typeof caches !== 'undefined' && typeof caches.keys === 'function') {
+      const keys = await caches.keys()
+      await Promise.all(
+        keys.map((key) =>
+          caches.delete(key).catch(() => {
+            /* ignore */
+          }),
+        ),
+      )
+    }
+
+    serviceWorkerStatus.value = 'cleared'
+    serviceWorkerMessage.value = 'Service workers and caches cleared. Reloading to apply...'
+    setTimeout(() => {
+      window.location.reload()
+    }, 500)
+  } catch (error) {
+    serviceWorkerStatus.value = 'error'
+    serviceWorkerMessage.value = `Failed to clear service workers: ${error?.message || error}`
+  } finally {
+    serviceWorkerClearing.value = false
+  }
+}
+
+const forceServiceWorkerUpdate = async () => {
+  if (!serviceWorkerSupported.value || typeof navigator === 'undefined') return
+  serviceWorkerUpdating.value = true
+  try {
+    const regs =
+      serviceWorkerRegistrations.value.length > 0
+        ? serviceWorkerRegistrations.value
+        : await navigator.serviceWorker.getRegistrations()
+    await Promise.all(
+      regs.map((reg) =>
+        reg
+          .update()
+          .then(() => {
+            if (reg.waiting) {
+              reg.waiting.postMessage({ type: 'SKIP_WAITING' })
+            }
+          })
+          .catch(() => {
+            /* ignore */
+          }),
+      ),
+    )
+
+    if (navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: 'SKIP_WAITING' })
+    }
+
+    serviceWorkerStatus.value = 'updating'
+    serviceWorkerMessage.value = 'Update requested. Reloading to activate latest assets...'
+    setTimeout(() => {
+      window.location.reload()
+    }, 500)
+  } catch (error) {
+    serviceWorkerStatus.value = 'error'
+    serviceWorkerMessage.value = `Failed to update service worker: ${error?.message || error}`
+  } finally {
+    serviceWorkerUpdating.value = false
+  }
+}
+
+const serviceWorkerStatusLabel = computed(() => {
+  switch (serviceWorkerStatus.value) {
+    case 'active':
+      return 'Active'
+    case 'installing':
+      return 'Installing'
+    case 'not-registered':
+      return 'Not Registered'
+    case 'unsupported':
+      return 'Unsupported'
+    case 'cleared':
+      return 'Cleared'
+    case 'updating':
+      return 'Updating'
+    case 'error':
+      return 'Error'
+    default:
+      return 'Checking...'
+  }
+})
+
+const serviceWorkerStatusColor = computed(() => {
+  switch (serviceWorkerStatus.value) {
+    case 'active':
+      return 'text-green-400'
+    case 'installing':
+    case 'updating':
+      return 'text-yellow-300'
+    case 'cleared':
+      return 'text-blue-300'
+    case 'unsupported':
+    case 'not-registered':
+      return 'text-gray-400'
+    case 'error':
+      return 'text-red-400'
+    default:
+      return 'text-gray-300'
+  }
+})
+
 // Auto-pull FM edits when enabled and pending exist (runs regardless of online/offline)
 const tryAutoPullEdits = async (why = 'watcher') => {
   try {
@@ -157,7 +323,7 @@ const tryAutoPullEdits = async (why = 'watcher') => {
 onMounted(async () => {
   try {
     appConfig.initializeDevLoggingSettings()
-    installDevLogger()
+    connectDevLoggerStore(appConfig)
     // Initialize BetterForms utilities (global BF object)
     console.log('BetterForms utilities initialized:', typeof window.BF !== 'undefined' ? 'BF available globally' : 'BF not found')
 
@@ -194,6 +360,18 @@ onMounted(async () => {
     }
   } catch (e) {
     console.warn('Could not apply persisted Firestore offline mode', e)
+  }
+
+  if (serviceWorkerSupported.value) {
+    await refreshServiceWorkerStatus()
+    swControllerChangeHandler = () => {
+      refreshServiceWorkerStatus()
+    }
+    try {
+      navigator.serviceWorker.addEventListener('controllerchange', swControllerChangeHandler)
+    } catch {
+      /* ignore */
+    }
   }
 
   // Start periodic FileMaker status polling for pending edits
@@ -240,6 +418,14 @@ onUnmounted(() => {
   if (fmStatusIntervalId) {
     clearInterval(fmStatusIntervalId)
     fmStatusIntervalId = null
+  }
+  if (serviceWorkerSupported.value && swControllerChangeHandler) {
+    try {
+      navigator.serviceWorker.removeEventListener('controllerchange', swControllerChangeHandler)
+    } catch {
+      /* ignore */
+    }
+    swControllerChangeHandler = null
   }
 })
 
@@ -684,6 +870,37 @@ const runWebSyncNow = async () => {
             <button @click="setFirestoreOnline"
               class="bg-green-600 hover:bg-green-700 text-white py-3 px-4 rounded-xl font-medium transition-colors">
               Go Online
+            </button>
+          </div>
+        </div>
+
+        <!-- Service Worker Status -->
+        <div class="mb-8">
+          <h4 class="text-sm font-semibold text-white mb-4">Service Worker</h4>
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-gray-400">Status:</span>
+            <span :class="['font-semibold', serviceWorkerStatusColor]">
+              {{ serviceWorkerStatusLabel }}
+            </span>
+          </div>
+          <p class="text-xs text-gray-500 mb-4">
+            {{ serviceWorkerMessage }}
+          </p>
+          <div class="flex flex-wrap gap-3">
+            <button @click="refreshServiceWorkerStatus"
+              class="flex-1 min-w-[150px] bg-gray-700 hover:bg-gray-600 text-white py-2 px-4 rounded-xl font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="!serviceWorkerSupported || serviceWorkerChecking">
+              {{ serviceWorkerChecking ? 'Checking...' : 'Refresh Status' }}
+            </button>
+            <button @click="forceServiceWorkerUpdate"
+              class="flex-1 min-w-[150px] bg-indigo-600 hover:bg-indigo-500 text-white py-2 px-4 rounded-xl font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="!serviceWorkerSupported || serviceWorkerUpdating">
+              {{ serviceWorkerUpdating ? 'Updating…' : 'Force Update + Reload' }}
+            </button>
+            <button @click="clearServiceWorkersAndCaches"
+              class="flex-1 min-w-[150px] bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded-xl font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="!serviceWorkerSupported || serviceWorkerClearing">
+              {{ serviceWorkerClearing ? 'Clearing…' : 'Clear + Reload' }}
             </button>
           </div>
         </div>

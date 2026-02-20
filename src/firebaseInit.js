@@ -27,6 +27,36 @@ let fsEditsCollectionRef = null
 let fsEditsRefUnsubscribe = null
 let lastPendingWritesSignature = ''
 
+function emitSyncEvent({ code, stage, level = 'info', message, data = {} }) {
+  try {
+    const appConfig = useAppConfigStore()
+    if (appConfig && typeof appConfig.addSyncEvent === 'function') {
+      appConfig.addSyncEvent({ code, stage, level, message, data })
+    }
+  } catch {
+    /* best-effort telemetry */
+  }
+}
+
+function toDebugPreview(value) {
+  if (value === null || typeof value === 'undefined') return String(value)
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (typeof value?.toDate === 'function') {
+    try {
+      return value.toDate().toISOString()
+    } catch {
+      return '[FirestoreTimestamp]'
+    }
+  }
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return Object.prototype.toString.call(value)
+  }
+}
+
 async function checkParentDocuments() {
   const appConfig = useAppConfigStore()
   if (!appConfig.organization.id || !appConfig.device.id) {
@@ -140,27 +170,66 @@ async function setupFirestoreListenersAndChecks() {
 
   // First, hydrate the device timestamp from Firebase before setting up subscription
   try {
+    emitSyncEvent({
+      code: 'FIREBASE_CURSOR_HYDRATE_START',
+      stage: 'firebase-hydrate',
+      message: 'Starting initial device cursor hydration from Firebase',
+    })
     const appConfig = useAppConfigStore()
     if (fsDeviceDocRef) {
       const deviceSnap = await getDoc(fsDeviceDocRef)
-      if (deviceSnap.exists()) {
+      if (!deviceSnap.exists()) {
+        emitSyncEvent({
+          code: 'FIREBASE_CURSOR_DEVICE_DOC_MISSING',
+          stage: 'firebase-hydrate',
+          level: 'warn',
+          message: 'Device document missing during initial cursor hydration',
+        })
+      } else {
         const tsField = deviceSnap.data()?.tsModFireStoreLastUpdate
-        if (tsField) {
+        if (!tsField) {
+          emitSyncEvent({
+            code: 'FIREBASE_CURSOR_FIELD_MISSING',
+            stage: 'firebase-hydrate',
+            level: 'warn',
+            message: 'Device document missing tsModFireStoreLastUpdate',
+          })
+          console.log('No tsModFireStoreLastUpdate field found in Firebase device document')
+        } else {
           const isoString =
             typeof tsField.toDate === 'function'
               ? tsField.toDate().toISOString()
               : new Date(tsField).toISOString()
           appConfig.device.tsModFireStoreLastUpdate = isoString
           console.log('Hydrated device timestamp from Firebase:', isoString)
-        } else {
-          console.log('No tsModFireStoreLastUpdate field found in Firebase device document')
+          emitSyncEvent({
+            code: 'FIREBASE_CURSOR_HYDRATE_OK',
+            stage: 'firebase-hydrate',
+            message: 'Hydrated initial device cursor timestamp',
+            data: {
+              cursorIso: isoString,
+              rawType: typeof tsField,
+              rawValue: toDebugPreview(tsField),
+            },
+          })
         }
-      } else {
-        console.log('Device document does not exist in Firebase yet')
       }
+    } else {
+      emitSyncEvent({
+        code: 'FIREBASE_CURSOR_HYDRATE_SKIPPED_NO_REF',
+        stage: 'firebase-hydrate',
+        level: 'warn',
+        message: 'Skipped cursor hydration because fsDeviceDocRef is unavailable',
+      })
     }
   } catch (error) {
     console.warn('Failed to hydrate device timestamp:', error)
+    emitSyncEvent({
+      code: 'FIREBASE_CURSOR_HYDRATE_FAILED',
+      stage: 'firebase-hydrate',
+      level: 'error',
+      message: error?.message || 'Initial cursor hydration failed',
+    })
   }
 
   // Now set up the updates subscription with the hydrated timestamp

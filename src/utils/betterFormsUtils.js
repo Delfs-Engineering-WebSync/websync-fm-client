@@ -7,12 +7,42 @@ import {
   doc,
   updateDoc,
   getFirestore,
+  getDoc,
   onSnapshot,
   query,
   orderBy,
   where,
   Timestamp,
 } from 'firebase/firestore'
+
+function emitSyncEvent(appConfig, { code, stage, level = 'info', message, data = {} }) {
+  try {
+    if (appConfig && typeof appConfig.addSyncEvent === 'function') {
+      appConfig.addSyncEvent({ code, stage, level, message, data })
+    }
+  } catch {
+    /* best-effort telemetry */
+  }
+}
+
+function toDebugPreview(value) {
+  if (value === null || typeof value === 'undefined') return String(value)
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (typeof value?.toDate === 'function') {
+    try {
+      return value.toDate().toISOString()
+    } catch {
+      return '[FirestoreTimestamp]'
+    }
+  }
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return Object.prototype.toString.call(value)
+  }
+}
 
 // Equivalent to BF.getQueryParam()
 export function getQueryParam(paramName) {
@@ -578,7 +608,7 @@ async function handleWebSyncReceivePayload(options) {
 }
 
 // Handle subscribeUpdates action - Set up Firestore listener for updates
-function handleSubscribeUpdates() {
+async function handleSubscribeUpdates() {
   const appConfig = useAppConfigStore()
 
   // Check if device should subscribe to updates
@@ -588,42 +618,145 @@ function handleSubscribeUpdates() {
   }
 
   try {
-    // Determine timestamp for filtering
-    const defaultTimestamp = new Date()
-    const timestamp = appConfig.device.tsModFireStoreLastUpdate
-      ? new Date(appConfig.device.tsModFireStoreLastUpdate)
-      : defaultTimestamp
+    emitSyncEvent(appConfig, {
+      code: 'SUBSCRIBE_UPDATES_START',
+      stage: 'subscribe',
+      message: 'Starting subscribeUpdates cursor resolution',
+      data: {
+        hasLocalCursor: !!appConfig.device?.tsModFireStoreLastUpdate,
+      },
+    })
+
+    // Determine timestamp for filtering.
+    // Never silently fall back to "now" because that can skip backlog updates.
+    let timestamp = null
+    if (appConfig.device.tsModFireStoreLastUpdate) {
+      const localTs = new Date(appConfig.device.tsModFireStoreLastUpdate)
+      if (!Number.isNaN(localTs.getTime())) {
+        timestamp = localTs
+        emitSyncEvent(appConfig, {
+          code: 'CURSOR_SOURCE_LOCAL',
+          stage: 'subscribe',
+          message: 'Using local store cursor timestamp',
+          data: {
+            cursorIso: localTs.toISOString(),
+          },
+        })
+      } else {
+        emitSyncEvent(appConfig, {
+          code: 'CURSOR_LOCAL_INVALID',
+          stage: 'subscribe',
+          level: 'warn',
+          message: 'Local cursor exists but is invalid',
+          data: {
+            rawValue: toDebugPreview(appConfig.device.tsModFireStoreLastUpdate),
+          },
+        })
+      }
+    }
+
+    // If local state does not contain a valid timestamp, re-hydrate from Firestore device doc.
+    if (!timestamp && window.fsDeviceRef) {
+      emitSyncEvent(appConfig, {
+        code: 'CURSOR_HYDRATE_ATTEMPT_FIRESTORE',
+        stage: 'subscribe',
+        message: 'Attempting Firestore device cursor hydration',
+      })
+      try {
+        const deviceSnap = await getDoc(window.fsDeviceRef)
+        if (!deviceSnap.exists()) {
+          emitSyncEvent(appConfig, {
+            code: 'CURSOR_HYDRATE_DEVICE_DOC_MISSING',
+            stage: 'subscribe',
+            level: 'warn',
+            message: 'Device document missing during cursor hydration',
+          })
+        } else {
+          const tsField = deviceSnap.data()?.tsModFireStoreLastUpdate
+          if (!tsField) {
+            emitSyncEvent(appConfig, {
+              code: 'CURSOR_HYDRATE_FIELD_MISSING',
+              stage: 'subscribe',
+              level: 'warn',
+              message: 'Device doc missing tsModFireStoreLastUpdate field',
+            })
+          } else {
+            const hydratedTs =
+              typeof tsField.toDate === 'function' ? tsField.toDate() : new Date(tsField)
+            if (!Number.isNaN(hydratedTs.getTime())) {
+              timestamp = hydratedTs
+              appConfig.device.tsModFireStoreLastUpdate = hydratedTs.toISOString()
+              emitSyncEvent(appConfig, {
+                code: 'CURSOR_SOURCE_FIRESTORE',
+                stage: 'subscribe',
+                message: 'Using cursor hydrated from Firestore device doc',
+                data: {
+                  rawType: typeof tsField,
+                  rawValue: toDebugPreview(tsField),
+                  cursorIso: hydratedTs.toISOString(),
+                },
+              })
+            } else {
+              emitSyncEvent(appConfig, {
+                code: 'CURSOR_HYDRATE_PARSE_INVALID',
+                stage: 'subscribe',
+                level: 'warn',
+                message: 'Hydrated cursor exists but failed date parsing',
+                data: {
+                  rawType: typeof tsField,
+                  rawValue: toDebugPreview(tsField),
+                },
+              })
+            }
+          }
+        }
+      } catch (error) {
+        log(`subscribeUpdates - Timestamp re-hydration failed: ${error.message}`, 'warn')
+        emitSyncEvent(appConfig, {
+          code: 'CURSOR_HYDRATE_ERROR',
+          stage: 'subscribe',
+          level: 'error',
+          message: error?.message || 'Cursor hydration threw an error',
+        })
+      }
+    } else if (!timestamp) {
+      emitSyncEvent(appConfig, {
+        code: 'CURSOR_HYDRATE_SKIPPED_NO_DEVICE_REF',
+        stage: 'subscribe',
+        level: 'warn',
+        message: 'Cannot hydrate cursor: fsDeviceRef is unavailable',
+      })
+    }
+
+    if (!timestamp) {
+      log(
+        'subscribeUpdates - Missing tsModFireStoreLastUpdate, refusing to use "now" fallback',
+        'warn',
+      )
+      emitSyncEvent(appConfig, {
+        code: 'SUBSCRIBE_BLOCKED_MISSING_CURSOR',
+        stage: 'subscribe',
+        level: 'warn',
+        message: 'Subscription blocked because no valid cursor is available',
+      })
+      return Promise.resolve({
+        success: false,
+        message: 'Missing tsModFireStoreLastUpdate; subscription not started',
+      })
+    }
 
     log(
       `subscribeUpdates - Starting subscription from timestamp: ${timestamp.toISOString()}`,
       'info',
     )
-
-    // Update device timestamp if using default
-    if (timestamp === defaultTimestamp) {
-      appConfig.device.tsModFireStoreLastUpdate = timestamp
-
-      // Save back to Firestore if we have references
-      if (window.fsDeviceRef) {
-        try {
-          const db = getFirestore()
-          const deviceRef = doc(
-            db,
-            'Organizations',
-            appConfig.organization.id,
-            'Devices',
-            appConfig.device.id,
-          )
-          updateDoc(deviceRef, {
-            tsModFireStoreLastUpdate: timestamp,
-          }).catch((error) => {
-            log(`Error updating device timestamp: ${error.message}`, 'error')
-          })
-        } catch (error) {
-          log(`Error accessing Firestore for timestamp update: ${error.message}`, 'error')
-        }
-      }
-    }
+    emitSyncEvent(appConfig, {
+      code: 'SUBSCRIBE_UPDATES_READY',
+      stage: 'subscribe',
+      message: 'Subscription query is starting with resolved cursor',
+      data: {
+        cursorIso: timestamp.toISOString(),
+      },
+    })
 
     // Clean up existing subscription if any
     if (window.fsUpdatesRefUnsubscribe && typeof window.fsUpdatesRefUnsubscribe === 'function') {
@@ -654,13 +787,30 @@ function handleSubscribeUpdates() {
       },
       (error) => {
         log(`subscribeUpdates - Snapshot listener error: ${error.message}`, 'error')
+        emitSyncEvent(appConfig, {
+          code: 'SUBSCRIBE_SNAPSHOT_ERROR',
+          stage: 'subscribe',
+          level: 'error',
+          message: error?.message || 'Snapshot listener error',
+        })
       },
     )
 
     log('subscribeUpdates - Firestore listener established successfully', 'info')
+    emitSyncEvent(appConfig, {
+      code: 'SUBSCRIBE_UPDATES_ESTABLISHED',
+      stage: 'subscribe',
+      message: 'Firestore updates listener established',
+    })
     return Promise.resolve({ success: true, message: 'Updates subscription established' })
   } catch (error) {
     log(`subscribeUpdates - Error setting up subscription: ${error.message}`, 'error')
+    emitSyncEvent(appConfig, {
+      code: 'SUBSCRIBE_UPDATES_FAILED',
+      stage: 'subscribe',
+      level: 'error',
+      message: error?.message || 'Failed to set up subscription',
+    })
     return Promise.resolve({ success: false, error: error.message })
   }
 }

@@ -91,6 +91,8 @@ export const useAppConfigStore = defineStore('appConfig', {
     devLoggingEnabled: false,
     devLogs: [],
     devLogsMaxEntries: 500,
+    syncEvents: [],
+    syncEventsMaxEntries: 200,
   }),
   actions: {
     initializeConfigFromURLParams() {
@@ -249,6 +251,25 @@ export const useAppConfigStore = defineStore('appConfig', {
     },
     clearDevLogs() {
       this.devLogs = []
+    },
+    addSyncEvent(entry = {}) {
+      const eventEntry = {
+        id: entry.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        timestamp: entry.timestamp || new Date().toISOString(),
+        code: entry.code || 'EVENT',
+        stage: entry.stage || 'app',
+        level: entry.level || 'info',
+        message: entry.message || '',
+        data: entry.data || {},
+      }
+      this.syncEvents.push(eventEntry)
+      if (this.syncEvents.length > this.syncEventsMaxEntries) {
+        const excess = this.syncEvents.length - this.syncEventsMaxEntries
+        this.syncEvents.splice(0, excess)
+      }
+    },
+    clearSyncEvents() {
+      this.syncEvents = []
     },
     // We will add more actions here as we translate other parts of your initFirestore script
   },

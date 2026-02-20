@@ -17,6 +17,7 @@ let fmStatusIntervalId = null
 let swControllerChangeHandler = null
 
 const appVersion = packageJson?.version
+const syncSessionId = ref(`${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
 
 // Debounce: only show "System Up to Date" after 1s of inactivity
 const showUpdatesIdleState = ref(true)
@@ -104,6 +105,19 @@ const systemStatus = computed(() => {
   return 'idle'
 })
 
+watch(
+  () => appConfig.device?.tsModFireStoreLastUpdate,
+  (next, prev) => {
+    if (next === prev) return
+    emitSyncEvent({
+      code: 'SYNC_CURSOR_UPDATED',
+      stage: 'sync-cursor',
+      message: 'Updated tsModFireStoreLastUpdate cursor',
+      data: { previous: prev || null, next: next || null },
+    })
+  },
+)
+
 const handleDevLoggingToggle = (value) => {
   appConfig.setDevLoggingEnabled(value)
 }
@@ -118,6 +132,22 @@ const closeLogViewer = () => {
 
 const clearDevLogs = () => {
   appConfig.clearDevLogs()
+}
+
+const emitSyncEvent = ({ code, stage, level = 'info', message, data = {} }) => {
+  appConfig.addSyncEvent({
+    code,
+    stage,
+    level,
+    message,
+    data: {
+      ...data,
+      deviceId: appConfig.device?.id || null,
+      organizationId: appConfig.organization?.id || null,
+      sessionId: appConfig.sessionId || null,
+      syncSessionId: syncSessionId.value,
+    },
+  })
 }
 
 const getLogBadgeClass = (level) => {
@@ -139,6 +169,104 @@ const formatLogTimestamp = (isoString) => {
   } catch {
     return isoString
   }
+}
+
+const syncCursorIso = computed(() => {
+  try {
+    return appConfig.device?.tsModFireStoreLastUpdate
+      ? new Date(appConfig.device.tsModFireStoreLastUpdate).toISOString()
+      : 'Unavailable'
+  } catch {
+    return 'Invalid'
+  }
+})
+
+const lastSyncEvent = computed(() => {
+  if (!appConfig.syncEvents.length) return null
+  return appConfig.syncEvents[appConfig.syncEvents.length - 1]
+})
+
+const recentSyncEvents = computed(() => {
+  return appConfig.syncEvents.slice(-12).reverse()
+})
+
+const copyLogsAsJson = async () => {
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    device: {
+      id: appConfig.device?.id || null,
+      organizationId: appConfig.organization?.id || null,
+      contexts: appConfig.device?.contexts || [],
+    },
+    diagnostics: {
+      connectionStatus: connectionStatus.value,
+      firebaseStatus: firebaseStatus.value,
+      isOnline: isOnline.value,
+      isFirestoreOffline: isFirestoreOffline.value,
+      tsModFireStoreLastUpdate: syncCursorIso.value,
+      syncSessionId: syncSessionId.value,
+    },
+    logs: appConfig.devLogs,
+    syncEvents: appConfig.syncEvents,
+  }
+  const text = JSON.stringify(payload, null, 2)
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      emitSyncEvent({
+        code: 'LOG_EXPORT_COPY',
+        stage: 'diagnostics',
+        message: 'Copied diagnostics JSON to clipboard',
+      })
+    } else {
+      throw new Error('Clipboard API unavailable')
+    }
+  } catch (error) {
+    emitSyncEvent({
+      code: 'LOG_EXPORT_COPY_FAILED',
+      stage: 'diagnostics',
+      level: 'error',
+      message: error?.message || 'Failed to copy diagnostics JSON',
+    })
+    console.error('Copy logs failed:', error)
+  }
+}
+
+const downloadLogsAsJson = () => {
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    device: {
+      id: appConfig.device?.id || null,
+      organizationId: appConfig.organization?.id || null,
+      contexts: appConfig.device?.contexts || [],
+    },
+    diagnostics: {
+      connectionStatus: connectionStatus.value,
+      firebaseStatus: firebaseStatus.value,
+      isOnline: isOnline.value,
+      isFirestoreOffline: isFirestoreOffline.value,
+      tsModFireStoreLastUpdate: syncCursorIso.value,
+      syncSessionId: syncSessionId.value,
+    },
+    logs: appConfig.devLogs,
+    syncEvents: appConfig.syncEvents,
+  }
+  const content = JSON.stringify(payload, null, 2)
+  const blob = new Blob([content], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  const ts = new Date().toISOString().replace(/[:.]/g, '-')
+  anchor.href = url
+  anchor.download = `websync-diagnostics-${appConfig.device?.id || 'device'}-${ts}.json`
+  document.body.appendChild(anchor)
+  anchor.click()
+  document.body.removeChild(anchor)
+  URL.revokeObjectURL(url)
+  emitSyncEvent({
+    code: 'LOG_EXPORT_DOWNLOAD',
+    stage: 'diagnostics',
+    message: 'Downloaded diagnostics JSON',
+  })
 }
 
 // Service Worker Diagnostics
@@ -321,6 +449,11 @@ const tryAutoPullEdits = async (why = 'watcher') => {
 }
 
 onMounted(async () => {
+  emitSyncEvent({
+    code: 'APP_MOUNT',
+    stage: 'startup',
+    message: 'WebSync app mounted',
+  })
   try {
     appConfig.initializeDevLoggingSettings()
     connectDevLoggerStore(appConfig)
@@ -331,22 +464,49 @@ onMounted(async () => {
     console.log('FileMaker Bridge initialized:', fmBridgit.isFileMakerEnvironment ? 'FileMaker detected' : 'Standalone mode')
 
     appConfig.initializeConfigFromURLParams()
+    emitSyncEvent({
+      code: 'FIREBASE_INIT_START',
+      stage: 'firebase',
+      message: 'Initializing Firebase services',
+    })
     await initializeFirebaseServices()
     firebaseStatus.value = 'Connected successfully'
+    emitSyncEvent({
+      code: 'FIREBASE_INIT_OK',
+      stage: 'firebase',
+      message: 'Firebase initialized successfully',
+    })
   } catch (error) {
     firebaseStatus.value = `Connection failed: ${error.message}`
+    emitSyncEvent({
+      code: 'FIREBASE_INIT_FAILED',
+      stage: 'firebase',
+      level: 'error',
+      message: error?.message || 'Firebase initialization failed',
+    })
     console.error('Firebase initialization error:', error)
   }
 
   // Set up network connectivity monitoring
   window.addEventListener('online', () => {
     isOnline.value = true
+    emitSyncEvent({
+      code: 'NETWORK_ONLINE',
+      stage: 'network',
+      message: 'Network connection restored',
+    })
     console.log('Network: Online')
     tryAutoPullEdits('online')
   })
 
   window.addEventListener('offline', () => {
     isOnline.value = false
+    emitSyncEvent({
+      code: 'NETWORK_OFFLINE',
+      stage: 'network',
+      level: 'warn',
+      message: 'Network connection lost',
+    })
     console.log('Network: Offline')
   })
 
@@ -399,10 +559,22 @@ onMounted(async () => {
         }
         if (!Number.isFinite(pending) || pending < 0) pending = 0
         appConfig.fmPendingEdits = pending
+        emitSyncEvent({
+          code: 'FM_STATUS_POLL_OK',
+          stage: 'fm-status',
+          message: 'Polled FileMaker pending edits',
+          data: { pendingEdits: pending },
+        })
         // If there are pending edits and auto-pull is on, trigger sync
         tryAutoPullEdits('poll')
         appConfig.lastFmStatusAt = new Date().toISOString()
       } catch {
+        emitSyncEvent({
+          code: 'FM_STATUS_POLL_FAILED',
+          stage: 'fm-status',
+          level: 'warn',
+          message: 'Failed to poll FileMaker status',
+        })
         /* Non-fatal; ignore and retain previous value */
       }
     }
@@ -435,6 +607,12 @@ const setFirestoreOffline = async () => {
     await goFirestoreOffline()
     isFirestoreOffline.value = true
     localStorage.setItem('ws-firestore-offline', '1')
+    emitSyncEvent({
+      code: 'FIRESTORE_OFFLINE',
+      stage: 'firestore-network',
+      level: 'warn',
+      message: 'Firestore network manually disabled',
+    })
   } catch (e) {
     console.error('Failed to disable Firestore network', e)
   }
@@ -445,6 +623,11 @@ const setFirestoreOnline = async () => {
     await goFirestoreOnline()
     isFirestoreOffline.value = false
     localStorage.setItem('ws-firestore-offline', '0')
+    emitSyncEvent({
+      code: 'FIRESTORE_ONLINE',
+      stage: 'firestore-network',
+      message: 'Firestore network manually enabled',
+    })
   } catch (e) {
     console.error('Failed to enable Firestore network', e)
   }
@@ -458,6 +641,12 @@ const openWebSyncConfig = async () => {
       fireAndForget: true,
     })
   } catch (error) {
+    emitSyncEvent({
+      code: 'OPEN_CONFIG_FAILED',
+      stage: 'actions',
+      level: 'error',
+      message: error?.message || 'Open WebSync Config failed',
+    })
     console.error('WebSync Config script error:', error)
   }
 }
@@ -469,6 +658,12 @@ const openWebSyncEdits = async () => {
       fireAndForget: true,
     })
   } catch (error) {
+    emitSyncEvent({
+      code: 'OPEN_EDITS_FAILED',
+      stage: 'actions',
+      level: 'error',
+      message: error?.message || 'Open WebSync Edits failed',
+    })
     console.error('WebSync Edits script error:', error)
   }
 }
@@ -480,6 +675,12 @@ const runWebSyncNow = async () => {
       fireAndForget: true,
     })
   } catch (error) {
+    emitSyncEvent({
+      code: 'RUN_SYNC_FAILED',
+      stage: 'actions',
+      level: 'error',
+      message: error?.message || 'Run sync failed',
+    })
     console.error('Run Sync script error:', error)
   }
 }
@@ -832,6 +1033,64 @@ const runWebSyncNow = async () => {
             </div>
           </div>
 
+          <!-- SYNC DIAGNOSTICS PANEL -->
+          <div class="bg-gray-800 border border-gray-700 rounded-xl p-3 sm:p-4 lg:col-span-12">
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <h2 class="text-lg font-bold text-white">Sync Diagnostics</h2>
+                <p class="text-xs text-gray-400">Runtime status for remote troubleshooting</p>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="text-xs text-gray-400">Events: {{ appConfig.syncEvents.length }}</span>
+                <button @click="copyLogsAsJson"
+                  class="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-gray-600 text-gray-200 text-xs hover:bg-gray-700 transition-colors"
+                  title="Copy diagnostics JSON">
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <span>Copy Logs</span>
+                </button>
+              </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-xs">
+              <div class="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2">
+                <p class="text-gray-400 mb-1">Sync Cursor</p>
+                <p class="text-white font-mono break-all">{{ syncCursorIso }}</p>
+              </div>
+              <div class="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2">
+                <p class="text-gray-400 mb-1">Firebase</p>
+                <p class="text-white break-all">{{ firebaseStatus }}</p>
+              </div>
+              <div class="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2">
+                <p class="text-gray-400 mb-1">Last Event</p>
+                <p class="text-white break-all">{{ lastSyncEvent?.code || 'None' }}</p>
+              </div>
+              <div class="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2">
+                <p class="text-gray-400 mb-1">Session</p>
+                <p class="text-white font-mono break-all">{{ syncSessionId }}</p>
+              </div>
+            </div>
+            <div class="mt-4 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden">
+              <div class="px-3 py-2 border-b border-gray-700 text-xs text-gray-400">
+                Recent Events (showing {{ recentSyncEvents.length }} of {{ appConfig.syncEvents.length }})
+              </div>
+              <div v-if="recentSyncEvents.length" class="max-h-44 overflow-y-auto divide-y divide-gray-800">
+                <div v-for="event in recentSyncEvents" :key="event.id" class="px-3 py-2 text-xs">
+                  <div class="flex items-center justify-between gap-3">
+                    <span class="text-white font-medium break-all">{{ event.code }}</span>
+                    <span class="text-gray-500 font-mono">{{ formatLogTimestamp(event.timestamp) }}</span>
+                  </div>
+                  <div class="text-gray-400 mt-0.5">{{ event.stage }} · {{ event.level }}</div>
+                </div>
+              </div>
+              <div v-else class="px-3 py-4 text-xs text-gray-500">
+                No sync events captured yet.
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
 
@@ -977,6 +1236,14 @@ const runWebSyncNow = async () => {
       <div class="flex items-center justify-between mb-4">
         <span class="text-sm text-gray-400">{{ appConfig.devLogs.length }} entries captured this session</span>
         <div class="flex gap-3">
+          <button @click="copyLogsAsJson"
+            class="px-4 py-2 rounded-xl border border-gray-600 text-gray-200 text-sm hover:bg-gray-700">
+            Copy JSON
+          </button>
+          <button @click="downloadLogsAsJson"
+            class="px-4 py-2 rounded-xl border border-gray-600 text-gray-200 text-sm hover:bg-gray-700">
+            Download JSON
+          </button>
           <button @click="clearDevLogs"
             class="px-4 py-2 rounded-xl border border-gray-600 text-gray-200 text-sm hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
             :disabled="!appConfig.devLogs.length">
@@ -1005,6 +1272,23 @@ const runWebSyncNow = async () => {
         </template>
         <div v-else class="py-10 text-center text-gray-500">
           No logs captured yet. Enable logging in the debug controls to start collecting entries.
+        </div>
+      </div>
+      <div class="mt-4 bg-gray-950 border border-gray-800 rounded-xl max-h-[30vh] overflow-y-auto divide-y divide-gray-900">
+        <template v-if="appConfig.syncEvents.length">
+          <div v-for="event in appConfig.syncEvents.slice().reverse()" :key="event.id" class="px-4 py-3 space-y-2">
+            <div class="flex items-center justify-between gap-3">
+              <span class="font-mono text-xs text-gray-500">{{ formatLogTimestamp(event.timestamp) }}</span>
+              <span class="px-2 py-0.5 rounded-full text-xs font-semibold tracking-wide uppercase text-purple-300 border border-purple-500/40 bg-purple-500/10">
+                {{ event.level }}
+              </span>
+            </div>
+            <div class="text-xs text-gray-400">{{ event.code }} · {{ event.stage }}</div>
+            <p class="text-sm text-gray-200 whitespace-pre-wrap break-words">{{ event.message }}</p>
+          </div>
+        </template>
+        <div v-else class="py-6 text-center text-gray-500">
+          No structured sync events captured yet.
         </div>
       </div>
     </div>

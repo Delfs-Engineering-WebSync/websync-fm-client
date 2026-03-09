@@ -16,6 +16,7 @@ export const useAppConfigStore = defineStore('appConfig', {
       idOrganization: null, // Will be set by URL param or defaulted to ORG_demo
       tsModFireStoreLastUpdate: new Date().toISOString(), // Initialize with current date as a sensible default
       autoPullEdits: false,
+      showSyncButton: false,
     },
     device: {
       // This will be populated further, including by URL params via initializeConfig
@@ -144,6 +145,18 @@ export const useAppConfigStore = defineStore('appConfig', {
         try {
           window.localStorage.setItem('ws-auto-pull-edits', value ? '1' : '0')
         } catch {}
+      }
+
+      // URL param override for Sync button visibility (defaults to hidden when omitted)
+      const syncBtnParam = getQueryParam('showSyncButton')
+      const legacySyncBtnParam = getQueryParam('showSync')
+      const chosenSyncButtonVisibility = syncBtnParam ?? legacySyncBtnParam
+      if (chosenSyncButtonVisibility !== null) {
+        const normalized = String(chosenSyncButtonVisibility).toLowerCase()
+        this.configx.showSyncButton =
+          normalized === '1' || normalized === 'true' || normalized === 'yes'
+      } else {
+        this.configx.showSyncButton = false
       }
 
       const contextsFromQuery = getQueryParam('contexts')

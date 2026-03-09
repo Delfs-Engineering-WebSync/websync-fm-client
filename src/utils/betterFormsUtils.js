@@ -147,6 +147,13 @@ async function handleFSUpdates(options) {
 async function sendUpdatesToDatabase(appConfig) {
   const batchSize = appConfig.fmUpdatesBatchSize || 10 // Default batch size
   let updatedTsModFireStoreLastUpdate = false
+  let latestAppliedInboundTs = null
+
+  const toComparableDate = (rawTs) => {
+    if (!rawTs) return null
+    const parsed = typeof rawTs?.toDate === 'function' ? rawTs.toDate() : new Date(rawTs)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
 
   appConfig.isUpdatingFM = true
 
@@ -168,6 +175,14 @@ async function sendUpdatesToDatabase(appConfig) {
       if (result.success) {
         log(`${batch.length} Updates successfully saved!`, 'info')
         appConfig.updatesTotalCompleted += batch.length
+
+        batch.forEach((edit) => {
+          const parsedTs = toComparableDate(edit?._tsModFireStore)
+          if (!parsedTs) return
+          if (!latestAppliedInboundTs || parsedTs.getTime() > latestAppliedInboundTs.getTime()) {
+            latestAppliedInboundTs = parsedTs
+          }
+        })
 
         // Process batch completion logic
         const timestampUpdated = updatesBatchesObject(batch, appConfig)
@@ -193,6 +208,11 @@ async function sendUpdatesToDatabase(appConfig) {
         log(`ERROR writing batch to database: ${JSON.stringify(result.error)}`, 'error')
         break
       }
+    }
+
+    if (!updatedTsModFireStoreLastUpdate && latestAppliedInboundTs) {
+      appConfig.device.tsModFireStoreLastUpdate = latestAppliedInboundTs.toISOString()
+      updatedTsModFireStoreLastUpdate = true
     }
 
     // Update Firestore timestamp if needed

@@ -11,6 +11,7 @@ const appConfig = useAppConfigStore()
 const firebaseStatus = ref('Initializing...')
 const showDebugControls = ref(false)
 const showLogViewer = ref(false)
+const showSyncDiagnostics = ref(false)
 const isOnline = ref(navigator.onLine)
 const isFirestoreOffline = ref(false)
 let fmStatusIntervalId = null
@@ -783,7 +784,7 @@ const runWebSyncNow = async () => {
             </button>
 
             <!-- Primary Sync Button at far right -->
-            <button @click="runWebSyncNow"
+            <button v-if="appConfig.configx.showSyncButton" @click="runWebSyncNow"
               class="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
               aria-label="Run Sync" title="Run Sync">
               <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -1034,7 +1035,7 @@ const runWebSyncNow = async () => {
           </div>
 
           <!-- SYNC DIAGNOSTICS PANEL -->
-          <div class="bg-gray-800 border border-gray-700 rounded-xl p-3 sm:p-4 lg:col-span-12">
+          <div v-if="showSyncDiagnostics" class="bg-gray-800 border border-gray-700 rounded-xl p-3 sm:p-4 lg:col-span-12">
             <div class="flex items-center justify-between mb-4">
               <div>
                 <h2 class="text-lg font-bold text-white">Sync Diagnostics</h2>
@@ -1206,6 +1207,20 @@ const runWebSyncNow = async () => {
           <p v-if="appConfig.devLogs.length" class="text-xs text-gray-500 mt-2">
             Turning logging off clears captured entries automatically.
           </p>
+        </div>
+
+        <!-- Sync Diagnostics -->
+        <div class="mb-8">
+          <h4 class="text-sm font-semibold text-white mb-4">Sync Diagnostics</h4>
+          <div class="flex items-center justify-between">
+            <span class="text-gray-400">Show Sync Diagnostics panel</span>
+            <label class="inline-flex items-center gap-3">
+              <input type="checkbox" :checked="showSyncDiagnostics"
+                @change="(e) => showSyncDiagnostics = e.target.checked"
+                class="w-5 h-5 rounded border-gray-600 bg-gray-700" />
+              <span class="text-xs text-gray-400">{{ showSyncDiagnostics ? 'Visible' : 'Hidden' }}</span>
+            </label>
+          </div>
         </div>
 
       </div>
